@@ -1,0 +1,7 @@
+*.swp
+node_modules
+package-lock.json
+package.json
+!openwhisk-package-couchdb/package.json
+*.zip
+index.js
