@@ -1,14 +1,22 @@
 # OpenWhisk S3 Access Benchmark
 
-This benchmark is designed to test the performance of OpenWhisk actions accessing S3 storage, similar to the AWS Lambda implementation in the lambda-bc-opt directory.
+This benchmark is designed to test the performance of OpenWhisk actions accessing S3 storage, similar to the AWS Lambda implementation in the lambda-bc-opt directory. It provides a foundation for implementing batching at the runtime level in OpenWhisk.
+
+## Overview
+
+The benchmark mimics the data storage access pattern from the original lambda-bc-opt implementation:
+- It accesses S3 storage to list objects
+- Retrieves and reads the content of objects
+- Processes the extracted data
+- Supports multiple S3 calls per invocation
 
 ## Setup
 
 ### Prerequisites
 
-- OpenWhisk CLI (`wsk`) configured with your OpenWhisk deployment
-- Python 3.6+ with pip
-- AWS credentials configured for S3 access
+- OpenWhisk deployment with `wsk` CLI configured
+- Python 3.7+ with pip
+- AWS credentials with S3 access
 
 ### Configuration
 
@@ -24,7 +32,7 @@ cp template.local.env local.env
 # AWS credentials
 AWS_ACCESS_KEY_ID=your_access_key_here
 AWS_SECRET_ACCESS_KEY=your_secret_key_here
-AWS_REGION=us-east-2
+AWS_REGION=us-east-1
 
 # S3 configuration
 S3_BUCKET=your_bucket_name
@@ -36,24 +44,39 @@ OPENWHISK_AUTH=your_auth_key
 
 ### Installation
 
-1. Deploy the S3 access action:
+Deploy the S3 access action:
 
 ```bash
-chmod +x deploy.sh
-./deploy.sh s3-access
+./deploy.sh
 ```
 
-This will create an OpenWhisk action named `s3-access` that performs S3 operations using the credentials from your `local.env` file.
+This will:
+1. Create a Python virtual environment
+2. Install dependencies from requirements.txt
+3. Package the S3 access action with dependencies
+4. Deploy the action to OpenWhisk with the credentials from local.env
 
 ## Running the Benchmark
 
-Use the benchmark runner script to invoke the action multiple times and collect performance metrics:
+### Direct Invocation
+
+You can invoke the action directly for testing:
 
 ```bash
-python benchmark_runner.py --action s3-access --rate 10 --invocations 100 --calls 1
+# Single S3 call
+wsk action invoke s3-access --blocking --result
+
+# Multiple S3 calls
+wsk action invoke s3-access --blocking --result --param num_calls 5
 ```
 
-The runner will automatically use settings from your `local.env` file.
+### Benchmark Runner
+
+For performance benchmarking, use the benchmark runner script:
+
+```bash
+python benchmark_runner.py --action s3-access --rate 10 --invocations 100 --calls 3
+```
 
 ### Parameters
 
@@ -62,24 +85,28 @@ The runner will automatically use settings from your `local.env` file.
 - `--invocations`: Total number of invocations to perform (default: 100)
 - `--calls`: Number of S3 calls per invocation (default: 1)
 - `--output`: Output file for results (default: `benchmark_results.txt`)
-- `--bucket`: Override the S3 bucket name from local.env
 
 ## Results
 
-The benchmark will generate a results file containing:
+The benchmark generates a results file containing:
 
 - Execution time percentiles (50th, 90th, 99th)
 - Min, max, and mean execution times
 - Raw results for all invocations
 
-## Advanced Configuration
+## Project Structure
 
-If you don't want to use the `local.env` file, you can also provide AWS credentials and configure S3 directly when creating the OpenWhisk action:
+```
+openwhisk/benchmark/
+├── actions/
+│   ├── s3_access.py       # The OpenWhisk action implementation
+│   └── requirements.txt   # Python dependencies
+├── benchmark_runner.py    # Script to invoke actions and collect metrics
+├── deploy.sh              # Script to package and deploy the action
+├── template.local.env     # Template for configuration variables
+└── README.md              # This documentation
+```
 
-```bash
-wsk action create s3-access s3_action.zip \
-    --param AWS_ACCESS_KEY_ID your_access_key \
-    --param AWS_SECRET_ACCESS_KEY your_secret_key \
-    --param AWS_REGION your_region \
-    --param bucket your_bucket_name
-``` 
+## Future Work
+
+This implementation provides the base functionality for S3 storage access. Future work will implement a batching service using a DaemonSet that runs per-node in the OpenWhisk deployment. 
