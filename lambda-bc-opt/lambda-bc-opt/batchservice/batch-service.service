@@ -1,0 +1,30 @@
+[Unit]
+Description=Batch Service
+After=network.target
+
+[Service]
+# Specify the user and group to run the service (optional)
+User=ubuntu
+Group=ubuntu
+
+# Set environment variables directly
+Environment="REDIS_HOST=172.31.14.91"
+Environment="REDIS_PORT=6379"
+Environment="APP_HOST=172.31.13.83"
+Environment="APP_PORT=8090"
+
+# OR use an environment file (recommended for multiple variables)
+# EnvironmentFile=/etc/myapp/env
+
+# Path to your application executable
+ExecStart=/home/ubuntu/batch-service
+StandardOutput=append:/var/log/batch-service.log
+StandardError=append:/var/log/batch-service.log
+
+
+# Restart the service on failure
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

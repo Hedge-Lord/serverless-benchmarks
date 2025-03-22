@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  batchservice:
+    build:
+      context: ..
+      dockerfile: deploy/DockerFile-batchservice
+    env_file:
+      - .env
+    ports:
+      - "${APP_PORT}:${APP_PORT}"
+    depends_on:
+      - redis
+    networks:
+      - mynetwork
+
+  redis:
+    image: redis:7.4-bookworm
+    env_file:
+      - .env
+    ports:
+      - "${REDIS_PORT}:6379"
+    networks:
+      - mynetwork
+
+networks:
+  mynetwork:
+    driver: bridge

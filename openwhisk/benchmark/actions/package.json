@@ -1,0 +1,9 @@
+{
+  "name": "s3-access-benchmark",
+  "version": "1.0.0",
+  "description": "OpenWhisk benchmark action for S3 access",
+  "main": "s3_access.py",
+  "dependencies": {
+    "boto3": "^1.28.0"
+  }
+} 
