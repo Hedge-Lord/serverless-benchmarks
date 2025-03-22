@@ -22,17 +22,32 @@ source "$SCRIPT_DIR/local.env"
 ACTION_NAME=${1:-s3-access}
 ACTION_DIR="$SCRIPT_DIR/actions"
 ZIP_FILE="s3_action.zip"
+TEMP_DIR=$(mktemp -d)
 
 echo "Deploying OpenWhisk S3 access benchmark action..."
 
-# Create zip package with dependencies
-echo "Creating action package..."
-cd $ACTION_DIR
-pip install -t . -r requirements.txt
-zip -r ../$ZIP_FILE *.py boto3 botocore s3transfer jmespath dateutil urllib3 six python_dateutil
+# Create a clean temporary directory for packaging
+echo "Setting up package environment..."
+mkdir -p $TEMP_DIR/package
 
-# Go back to previous directory
-cd ..
+# Copy the action file
+cp $ACTION_DIR/s3_access.py $TEMP_DIR/package/__main__.py
+
+# Install dependencies in the package directory
+echo "Installing dependencies..."
+cd $TEMP_DIR/package
+pip install boto3 -t .
+
+# Make sure there's a proper __init__.py file
+touch __init__.py
+
+# Create the zip
+echo "Creating action package..."
+cd $TEMP_DIR/package
+zip -r $SCRIPT_DIR/$ZIP_FILE *
+
+# Go back to script directory
+cd $SCRIPT_DIR
 
 # Check if action exists and delete it
 if wsk action get $ACTION_NAME > /dev/null 2>&1; then
@@ -49,12 +64,20 @@ wsk action create $ACTION_NAME --kind python:3 $ZIP_FILE \
     --param AWS_REGION "$AWS_REGION" \
     --param bucket "$S3_BUCKET"
 
+# Clean up temporary directory
+rm -rf $TEMP_DIR
+
 # Verify the action was created
 echo "Verifying action deployment..."
 wsk action get $ACTION_NAME
 
 echo "Deployment complete. You can now run the benchmark using:"
 echo "python benchmark_runner.py --action $ACTION_NAME --rate 10 --invocations 100 --calls 1"
+
+# To Debug: Invoke the action directly
+echo ""
+echo "To debug the action, run:"
+echo "wsk action invoke $ACTION_NAME --blocking --result"
 
 # Cleanup the zip file
 rm -f $ZIP_FILE
