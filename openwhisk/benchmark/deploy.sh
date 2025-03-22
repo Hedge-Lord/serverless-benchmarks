@@ -1,6 +1,5 @@
 #!/bin/bash
-
-# Script to deploy OpenWhisk actions for the S3 access benchmark
+# Script to package and deploy the S3 access benchmark action
 
 set -e
 
@@ -21,27 +20,32 @@ source "$SCRIPT_DIR/local.env"
 # Configuration
 ACTION_NAME=${1:-s3-access}
 ACTION_DIR="$SCRIPT_DIR/actions"
-ZIP_FILE="s3_action.zip"
 TEMP_DIR=$(mktemp -d)
+ZIP_FILE="s3_action.zip"
 
 echo "Deploying OpenWhisk S3 access benchmark action..."
 
-# Create a clean temporary directory for packaging
-echo "Setting up package environment..."
+# Create a virtual environment for dependencies
+echo "Setting up Python environment..."
+python3 -m venv $TEMP_DIR/venv
+source $TEMP_DIR/venv/bin/activate
+
+# Install dependencies from requirements.txt
+echo "Installing dependencies from requirements.txt..."
+pip install -r $ACTION_DIR/requirements.txt
+
+# Create action package dir
 mkdir -p $TEMP_DIR/package
 
 # Copy the action file
+echo "Copying action code..."
 cp $ACTION_DIR/s3_access.py $TEMP_DIR/package/__main__.py
 
-# Install dependencies in the package directory
-echo "Installing dependencies..."
-cd $TEMP_DIR/package
-pip install boto3 -t .
+# Copy dependencies
+echo "Copying dependencies..."
+cp -r $TEMP_DIR/venv/lib/python*/site-packages/* $TEMP_DIR/package/
 
-# Make sure there's a proper __init__.py file
-touch __init__.py
-
-# Create the zip
+# Create the zip package
 echo "Creating action package..."
 cd $TEMP_DIR/package
 zip -r $SCRIPT_DIR/$ZIP_FILE *
@@ -64,8 +68,9 @@ wsk action create $ACTION_NAME --kind python:3 $ZIP_FILE \
     --param AWS_REGION "$AWS_REGION" \
     --param bucket "$S3_BUCKET"
 
-# Clean up temporary directory
+# Clean up
 rm -rf $TEMP_DIR
+rm -f $ZIP_FILE
 
 # Verify the action was created
 echo "Verifying action deployment..."
@@ -73,13 +78,9 @@ wsk action get $ACTION_NAME
 
 echo "Deployment complete. You can now run the benchmark using:"
 echo "python benchmark_runner.py --action $ACTION_NAME --rate 10 --invocations 100 --calls 1"
-
-# To Debug: Invoke the action directly
 echo ""
-echo "To debug the action, run:"
+echo "Or invoke directly with:"
 echo "wsk action invoke $ACTION_NAME --blocking --result"
-
-# Cleanup the zip file
-rm -f $ZIP_FILE
+echo "wsk action invoke $ACTION_NAME --blocking --result --param num_calls 5"
 
 echo "Done." 

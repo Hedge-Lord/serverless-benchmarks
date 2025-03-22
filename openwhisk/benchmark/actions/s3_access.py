@@ -10,17 +10,14 @@ def main(params):
     start_time = time.time()
     
     try:
-        # Print debugging info about environment
-        python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-        
         # Get parameters or use defaults
         num_calls = params.get('num_calls', 1)
-        target_bucket = params.get('bucket', 'ggtest-benchmark-logs')
+        target_bucket = params.get('bucket', 'ow-benchmark-test')
         
         # Set AWS credentials from parameters
         aws_access_key = params.get('AWS_ACCESS_KEY_ID')
         aws_secret_key = params.get('AWS_SECRET_ACCESS_KEY')
-        aws_region = params.get('AWS_REGION', 'us-east-2')
+        aws_region = params.get('AWS_REGION', 'us-east-1')
         
         # Validate credentials
         if not aws_access_key or not aws_secret_key:
@@ -49,7 +46,8 @@ def main(params):
             'execution_time_ms': execution_time * 1000,
             'num_calls': num_calls,
             'results_count': len(s3_results),
-            'python_version': python_version,
+            'boto3_version': boto3.__version__,
+            'python_version': f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
             'results': s3_results
         }
     except Exception as e:
@@ -124,17 +122,24 @@ def process_results(results):
 
 def access_s3(bucket_name, start_date, end_date, aws_access_key=None, aws_secret_key=None, aws_region=None):
     try:
-        # Create S3 client with credentials if provided
-        if aws_access_key and aws_secret_key:
-            s3 = boto3.client(
-                's3',
-                aws_access_key_id=aws_access_key,
-                aws_secret_access_key=aws_secret_key,
-                region_name=aws_region
-            )
-        else:
-            # Otherwise use the default credentials
-            s3 = boto3.client('s3')
+        # Create S3 client with credentials
+        s3 = boto3.client(
+            's3',
+            aws_access_key_id=aws_access_key,
+            aws_secret_access_key=aws_secret_key,
+            region_name=aws_region
+        )
+        
+        # First list the buckets (just for verification)
+        buckets_response = s3.list_buckets()
+        buckets = [bucket['Name'] for bucket in buckets_response['Buckets']]
+        
+        # Check if our target bucket exists
+        if bucket_name not in buckets:
+            return {
+                'status': 'error',
+                'message': f'Bucket {bucket_name} not found. Available buckets: {buckets}'
+            }
         
         # List objects in the bucket (limit to 20 for benchmark purposes)
         try:
@@ -150,7 +155,7 @@ def access_s3(bucket_name, start_date, end_date, aws_access_key=None, aws_secret
             return {
                 'status': 'success',
                 'message': f'No objects found in bucket {bucket_name}',
-                'response': response
+                'buckets': buckets
             }
         
         objects = response.get('Contents', [])
@@ -161,9 +166,17 @@ def access_s3(bucket_name, start_date, end_date, aws_access_key=None, aws_secret
         
         # Process and filter objects by date, then get and process their content
         extracted_results = []
+        object_details = []
+        
         for obj in objects:
             last_modified = obj['LastModified']
             if start_date <= last_modified <= end_date:
+                object_details.append({
+                    'key': obj['Key'],
+                    'last_modified': str(last_modified),
+                    'size': obj['Size']
+                })
+                
                 try:
                     # Get the object content
                     obj_response = s3.get_object(Bucket=bucket_name, Key=obj['Key'])
@@ -175,12 +188,17 @@ def access_s3(bucket_name, start_date, end_date, aws_access_key=None, aws_secret
                     # If we can't get the object, add an error entry
                     extracted_results.append(("error", "get_object", str(e), []))
         
-        # Process the results into summary dictionaries
-        processed_results = process_results(extracted_results)
+        # Process the results into summary dictionaries if we have any
+        processed_results = process_results(extracted_results) if extracted_results else {
+            "by_object": {},
+            "by_accessor": {}
+        }
         
         return {
             'status': 'success',
+            'bucket': bucket_name,
             'objects_count': len(objects),
+            'objects': object_details,
             'processed_count': len(extracted_results),
             'sample_results': extracted_results[:3] if extracted_results else [],
             'processed_summary': {
