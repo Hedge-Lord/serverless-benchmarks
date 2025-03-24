@@ -195,7 +195,12 @@ kubectl get pods -n openwhisk
 
 Eventually they become Running; if the "invoker" is stuck, check that the node is labeled correctly.
 
-## 7. Port-Forward NGINX for wsk
+## 7. Set apihost and Port-Forward NGINX for wsk
+```bash
+# This makes OpenWhisk only accessible through the master node. 
+# You can replace localhost with <master_node_public_ip> if you want to access it remotely
+wsk property set --apihost http://localhost:3233  
+```
 
 OpenWhisk typically expects to talk to the NGINX front-end (port 80) inside the cluster:
 
