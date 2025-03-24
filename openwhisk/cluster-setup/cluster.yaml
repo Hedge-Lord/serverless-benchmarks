@@ -1,0 +1,44 @@
+# This Helm values override file is configured for experimental testing of per‑VM batching
+# under high load. We increase concurrency limits beyond the predefined defaults.
+
+whisk:
+  limits:
+    actions:
+      concurrency:
+        max: 10
+    actionsInvokesConcurrent: 1000 
+    actionsInvokesPerminute: 1000       
+    actionsSequenceMaxlength: 1000
+    activation:
+      payload:
+        max: "1048576"
+    triggersFiresPerminute: 1000
+
+openwhisk:
+  controller:
+    replicas: 1
+    env:
+      - name: __OW_MAX_CONTAINER_CONCURRENCY
+        value: "1000"
+      - name: __OW_MAX_ACTION_CONCURRENT
+        value: "1000"
+
+  invoker:
+    replicas: 3
+    containerConcurrency: 1000
+    env:
+      - name: __OW_PER_VM_BATCHING
+        value: "true"
+      - name: __OW_BATCH_LIMIT
+        value: "50"
+
+  whisk:
+    limits:
+      actions:
+        maxConcurrent: 2000
+
+kafka:
+  replicas: 1
+
+zookeeper:
+  replicas: 1
