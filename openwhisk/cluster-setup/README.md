@@ -107,12 +107,10 @@ sudo apt-get install -y kubelet kubeadm kubectl
 sudo apt-mark hold kubelet kubeadm kubectl
 ```
 
-## 2. kubeadm Init and Calico
-
-### (a) Initialize the cluster on control-plane node
-
+#### For all nodes, make sure this is run:
 Will probably have to run this:
 ```bash
+sudo swapoff -a
 sudo containerd config default | sudo tee /etc/containerd/config.toml
 sudo vim /etc/containerd/config.toml
 ```
@@ -122,6 +120,10 @@ Make sure that in `/etc/containerd/config.toml` `SystemdCgroup` is set to true
 [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
   SystemdCgroup = true
 ```
+
+## 2. kubeadm Init and Calico
+
+### (a) Initialize the cluster on control-plane node
 
 ```bash
 kubeadm init --pod-network-cidr=192.168.0.0/16 \
