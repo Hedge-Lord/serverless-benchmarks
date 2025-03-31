@@ -89,17 +89,22 @@ df -h /var/lib/containerd
 ### (d) Install kubeadm, kubelet, kubectl
 
 ```bash
-curl -fsSLo /usr/share/keyrings/kubernetes-archive-keyring.gpg \
-    https://packages.cloud.google.com/apt/doc/apt-key.gpg
+# Import the repository GPG key (optional if you want to later verify, but we will mark the repo as trusted)
+curl -fsSLo /usr/share/keyrings/kubernetes-archive-keyring.gpg https://packages.cloud.google.com/apt/doc/apt-key.gpg
 
-cat <<EOF | tee /etc/apt/sources.list.d/kubernetes.list
-deb [signed-by=/usr/share/keyrings/kubernetes-archive-keyring.gpg] \
-  https://pkgs.k8s.io/core:/stable:/v1.28/deb/ /
+# Configure the repository with trusted=yes
+cat <<EOF | sudo tee /etc/apt/sources.list.d/kubernetes.list
+deb [trusted=yes] https://pkgs.k8s.io/core:/stable:/v1.28/deb/ /
 EOF
 
-apt-get update
-apt-get install -y kubelet kubeadm kubectl
-apt-mark hold kubelet kubeadm kubectl
+# Update package lists
+sudo apt-get update
+
+# Install Kubernetes components
+sudo apt-get install -y kubelet kubeadm kubectl
+
+# Hold the versions
+sudo apt-mark hold kubelet kubeadm kubectl
 ```
 
 ## 2. kubeadm Init and Calico
