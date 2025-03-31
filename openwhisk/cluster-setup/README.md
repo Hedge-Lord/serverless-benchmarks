@@ -40,15 +40,50 @@ systemctl enable containerd
 If you need more space:
 
 ```bash
-# Stop containerd, remove/move old data
-systemctl stop containerd
-mv /var/lib/containerd /var/lib/containerd.old
+# Format /dev/sda4 as ext4 (WARNING: This will erase any data on /dev/sda4)
+sudo mkfs.ext4 /dev/sda4
 
-mkdir -p /mydata/containerd
-mount --bind /mydata/containerd /var/lib/containerd
-echo "/mydata/containerd /var/lib/containerd none bind 0 0" >> /etc/fstab
+# Create a mount point for the large partition
+sudo mkdir -p /mydata
 
-systemctl start containerd
+# Optionally, get the UUID of the partition for a stable fstab entry
+sudo blkid /dev/sda4
+# Suppose the output gives: UUID="e8541e57-735a-4452-b320-7ebcbea2ab7e"
+
+# Add an entry to /etc/fstab so that /dev/sda4 mounts at /mydata automatically
+# Using the UUID is more robust than device names:
+echo "UUID=e8541e57-735a-4452-b320-7ebcbea2ab7e /mydata ext4 defaults 0 2" | sudo tee -a /etc/fstab
+
+# Mount the partition (or reboot)
+sudo mount -a
+
+# Verify that /mydata is mounted with sufficient space
+df -h /mydata
+
+# Stop containerd to avoid any conflicts
+sudo systemctl stop containerd
+
+# Move the existing containerd data (if any) to a backup location
+sudo mv /var/lib/containerd /var/lib/containerd.old
+
+# Create a new directory on your large partition for containerd
+sudo mkdir -p /mydata/containerd
+
+# Create the mount point for containerd if it doesn't already exist
+sudo mkdir -p /var/lib/containerd
+
+# Bind-mount the new containerd directory from /mydata to /var/lib/containerd
+sudo mount --bind /mydata/containerd /var/lib/containerd
+
+# Add the bind mount to /etc/fstab so that it persists after reboot
+echo "/mydata/containerd /var/lib/containerd none bind 0 0" | sudo tee -a /etc/fstab
+
+# Start containerd again
+sudo systemctl start containerd
+
+# Verify the bind mount
+df -h /var/lib/containerd
+
 ```
 
 ### (d) Install kubeadm, kubelet, kubectl
