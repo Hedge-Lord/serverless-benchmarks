@@ -111,6 +111,18 @@ sudo apt-mark hold kubelet kubeadm kubectl
 
 ### (a) Initialize the cluster on control-plane node
 
+Will probably have to run this:
+```bash
+sudo containerd config default | sudo tee /etc/containerd/config.toml
+sudo vim /etc/containerd/config.toml
+```
+
+Make sure that in `/etc/containerd/config.toml` `SystemdCgroup` is set to true
+```
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
+  SystemdCgroup = true
+```
+
 ```bash
 kubeadm init --pod-network-cidr=192.168.0.0/16 \
     --cri-socket unix:///run/containerd/containerd.sock
