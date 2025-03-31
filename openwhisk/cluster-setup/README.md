@@ -40,7 +40,7 @@ systemctl enable containerd
 If you need more space:
 
 ```bash
-# Format /dev/sda4 as ext4 (WARNING: This will erase any data on /dev/sda4)
+# Format /dev/sda4 as ext4 (WARNING: This will erase any data on /dev/sda4) -- RUN lsblk to find what to use. On c220g1 this is sda4
 sudo mkfs.ext4 /dev/sda4
 
 # Create a mount point for the large partition
