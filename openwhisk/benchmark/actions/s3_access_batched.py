@@ -188,7 +188,18 @@ def access_s3_through_agent(agent_url, bucket_name, start_date, end_time):
             # Convert the LastModified string to datetime
             last_modified_str = obj.get('LastModified')
             if last_modified_str:
-                last_modified = datetime.strptime(last_modified_str, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+                try:
+                    # First try with microseconds format
+                    last_modified = datetime.strptime(last_modified_str, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+                except ValueError:
+                    try:
+                        # If that fails, try without microseconds
+                        last_modified = datetime.strptime(last_modified_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                    except ValueError:
+                        # If all else fails, just use current time and log the error
+                        last_modified = datetime.now(timezone.utc)
+                        print(f"Error parsing timestamp: {last_modified_str}")
+                
                 if start_date <= last_modified <= end_time:
                     object_details.append({
                         'key': obj['Key'],
