@@ -16,9 +16,17 @@ import (
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/gorilla/mux"
 	"github.com/serverless-benchmarks/openwhisk/batching-agent/pkg/batching"
 )
+
+// Set up logging to stderr to ensure we see output even if stdout is buffered
+func init() {
+	log.SetOutput(os.Stderr)
+	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
+	log.Println("Package initialized")
+}
 
 // Configuration holds the agent's configuration
 type Configuration struct {
@@ -43,12 +51,51 @@ type BatchingAgent struct {
 
 // NewBatchingAgent creates a new batching agent
 func NewBatchingAgent(config Configuration) (*BatchingAgent, error) {
-	// Configure AWS SDK
+	// Debug: Print environment variables
+	log.Printf("Checking AWS environment variables...")
+	accessKey := os.Getenv("AWS_ACCESS_KEY_ID")
+	secretKey := os.Getenv("AWS_SECRET_ACCESS_KEY")
+	if accessKey != "" {
+		log.Printf("AWS_ACCESS_KEY_ID is set (length: %d, prefix: %s)", len(accessKey), accessKey[:4])
+	} else {
+		log.Printf("AWS_ACCESS_KEY_ID is not set")
+	}
+	if secretKey != "" {
+		log.Printf("AWS_SECRET_ACCESS_KEY is set (length: %d, prefix: %s)", len(secretKey), secretKey[:4])
+	} else {
+		log.Printf("AWS_SECRET_ACCESS_KEY is not set")
+	}
+
+	// Configure AWS SDK with explicit credentials
+	creds := credentials.NewStaticCredentialsProvider(
+		accessKey,
+		secretKey,
+		"",
+	)
+
+	// Test credentials before creating config
+	credsValue, err := creds.Retrieve(context.Background())
+	if err != nil {
+		log.Printf("Failed to retrieve credentials: %v", err)
+		return nil, fmt.Errorf("failed to retrieve credentials: %w", err)
+	}
+	log.Printf("Successfully retrieved credentials - Access Key: %s, Secret Key: %s", 
+		credsValue.AccessKeyID[:4], 
+		credsValue.SecretAccessKey[:4])
+
 	cfg, err := awsconfig.LoadDefaultConfig(context.Background(), 
 		awsconfig.WithRegion(config.AwsRegion),
+		awsconfig.WithCredentialsProvider(creds),
 	)
 	if err != nil {
+		log.Printf("Failed to load AWS configuration: %v", err)
 		return nil, fmt.Errorf("failed to load AWS configuration: %w", err)
+	}
+
+	// Debug: Print AWS configuration details
+	log.Printf("AWS Configuration loaded - Region: %s, Credentials: %v", config.AwsRegion, cfg.Credentials != nil)
+	if cfg.Credentials != nil {
+		log.Printf("Credentials provider type: %T", cfg.Credentials)
 	}
 
 	s3Client := s3.NewFromConfig(cfg)
@@ -277,6 +324,9 @@ func (a *BatchingAgent) handleDebugConfig(w http.ResponseWriter, r *http.Request
 }
 
 func main() {
+	// Add early logging
+	log.Printf("Starting batching agent initialization...")
+	
 	// Parse command-line flags
 	port := flag.Int("port", 8080, "Port to listen on")
 	batchingEnabled := flag.Bool("batching", true, "Enable request batching")
@@ -286,6 +336,8 @@ func main() {
 	awsRegion := flag.String("aws-region", "us-east-1", "AWS region")
 	defaultBucketName := flag.String("default-bucket", "", "Default S3 bucket name")
 	flag.Parse()
+
+	log.Printf("Command line flags parsed - Port: %d, Region: %s, Bucket: %s", *port, *awsRegion, *defaultBucketName)
 
 	// Create configuration
 	config := Configuration{
@@ -298,12 +350,15 @@ func main() {
 		DefaultBucketName: *defaultBucketName,
 	}
 
+	log.Printf("Configuration created, attempting to create agent...")
+
 	// Create and start agent
 	agent, err := NewBatchingAgent(config)
 	if err != nil {
 		log.Fatalf("Failed to create batching agent: %v", err)
 	}
 
+	log.Printf("Agent created successfully, starting server...")
 	agent.Start()
 
 	// Set up signal handling for graceful shutdown

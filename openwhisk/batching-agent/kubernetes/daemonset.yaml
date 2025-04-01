@@ -14,10 +14,19 @@ spec:
       labels:
         app: s3-batching-agent
     spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - node0.ggz-248982.ucla-progsoftsys-pg0.utah.cloudlab.us
       containers:
       - name: batching-agent
-        image: s3-batching-agent:latest
-        imagePullPolicy: Never  # Don't try to pull from a registry, use local image only
+        image: localhost:5000/s3-batching-agent:latest
+        imagePullPolicy: Always  # Try to use local image, pull if not present
         ports:
         - containerPort: 8080
           hostPort: 8080  # Expose directly on the node at a fixed port

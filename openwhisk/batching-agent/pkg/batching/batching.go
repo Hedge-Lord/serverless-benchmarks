@@ -3,6 +3,7 @@ package batching
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -208,6 +209,8 @@ func (b *S3Batcher) processBatch(batch []*BatchRequest) {
 
 // executeRequest executes a single request
 func (b *S3Batcher) executeRequest(ctx context.Context, request *BatchRequest) {
+	log.Printf("Executing request of type: %s", request.Type)
+	
 	switch request.Type {
 	case TypeGetObject:
 		input := &s3.GetObjectInput{
@@ -215,8 +218,10 @@ func (b *S3Batcher) executeRequest(ctx context.Context, request *BatchRequest) {
 			Key:    &request.Key,
 		}
 		
+		log.Printf("Attempting GetObject for bucket: %s, key: %s", request.BucketName, request.Key)
 		result, err := b.client.GetObject(ctx, input)
 		if err != nil {
+			log.Printf("GetObject error: %v", err)
 			request.ErrorChan <- err
 		} else {
 			request.ResultChan <- result
@@ -230,8 +235,10 @@ func (b *S3Batcher) executeRequest(ctx context.Context, request *BatchRequest) {
 			MaxKeys: &maxKeys,
 		}
 		
+		log.Printf("Attempting ListObjects for bucket: %s, prefix: %s", request.BucketName, request.Prefix)
 		result, err := b.client.ListObjectsV2(ctx, input)
 		if err != nil {
+			log.Printf("ListObjects error: %v", err)
 			request.ErrorChan <- err
 		} else {
 			request.ResultChan <- result
@@ -240,8 +247,10 @@ func (b *S3Batcher) executeRequest(ctx context.Context, request *BatchRequest) {
 	case TypeListBuckets:
 		input := &s3.ListBucketsInput{}
 		
+		log.Printf("Attempting ListBuckets")
 		result, err := b.client.ListBuckets(ctx, input)
 		if err != nil {
+			log.Printf("ListBuckets error: %v", err)
 			request.ErrorChan <- err
 		} else {
 			request.ResultChan <- result
