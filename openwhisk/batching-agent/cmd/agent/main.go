@@ -171,6 +171,8 @@ func (a *BatchingAgent) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *BatchingAgent) handleListBuckets(w http.ResponseWriter, r *http.Request) {
+	log.Printf("Received ListBuckets request")
+	
 	resultChan := make(chan any, 1)
 	errorChan := make(chan error, 1)
 
@@ -183,12 +185,14 @@ func (a *BatchingAgent) handleListBuckets(w http.ResponseWriter, r *http.Request
 
 	// Submit the request
 	a.batcher.Submit(request)
+	log.Printf("Submitted batch request")
 
 	// Wait for the result
 	select {
 	case result := <-resultChan:
 		resp, ok := result.(*s3.ListBucketsOutput)
 		if !ok {
+			log.Printf("Invalid response type received: %T", result)
 			http.Error(w, "Invalid response type", http.StatusInternalServerError)
 			return
 		}
@@ -196,6 +200,7 @@ func (a *BatchingAgent) handleListBuckets(w http.ResponseWriter, r *http.Request
 		// Marshal the response
 		jsonData, err := json.Marshal(resp)
 		if err != nil {
+			log.Printf("Failed to marshal response: %v", err)
 			http.Error(w, fmt.Sprintf("Failed to marshal response: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -204,6 +209,7 @@ func (a *BatchingAgent) handleListBuckets(w http.ResponseWriter, r *http.Request
 		w.Write(jsonData)
 
 	case err := <-errorChan:
+		log.Printf("Error from batcher: %v", err)
 		http.Error(w, fmt.Sprintf("Failed to list buckets: %v", err), http.StatusInternalServerError)
 	}
 }
