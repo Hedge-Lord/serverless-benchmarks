@@ -63,7 +63,7 @@ func NewS3Batcher(client *s3.Client, enabled bool, batchWindow time.Duration, ma
 func (b *S3Batcher) Submit(request *BatchRequest) {
 	if !b.enabled {
 		// If batching is disabled, execute the request immediately
-		b.executeRequest(context.Background(), request)
+		b.executeGroupedRequests(context.Background(), []*BatchRequest{request})
 		return
 	}
 
@@ -154,109 +154,97 @@ func (b *S3Batcher) processBatch(batch []*BatchRequest) {
 			listBucketsRequests = append(listBucketsRequests, request)
 		default:
 			// Unknown request type, execute immediately
-			b.executeRequest(ctx, request)
+			b.executeGroupedRequests(ctx, []*BatchRequest{request})
 		}
 	}
 
 	// Process grouped GetObject requests
 	for _, requests := range getObjectRequests {
-		// Execute the first request
-		b.executeRequest(ctx, requests[0])
-		
-		// Copy the result to all other requests in the group
-		for i := 1; i < len(requests); i++ {
-			select {
-			case result := <-requests[0].ResultChan:
-				requests[i].ResultChan <- result
-			case err := <-requests[0].ErrorChan:
-				requests[i].ErrorChan <- err
-			}
-		}
+		b.executeGroupedRequests(ctx, requests)
 	}
 
 	// Process grouped ListObjects requests
 	for _, requests := range listObjectsRequests {
-		// Execute the first request
-		b.executeRequest(ctx, requests[0])
-		
-		// Copy the result to all other requests in the group
-		for i := 1; i < len(requests); i++ {
-			select {
-			case result := <-requests[0].ResultChan:
-				requests[i].ResultChan <- result
-			case err := <-requests[0].ErrorChan:
-				requests[i].ErrorChan <- err
-			}
-		}
+		b.executeGroupedRequests(ctx, requests)
 	}
 	
 	// Process ListBuckets requests (if any)
 	if len(listBucketsRequests) > 0 {
-		// Execute only the first request
-		b.executeRequest(ctx, listBucketsRequests[0])
-		
-		// Copy the result to all other requests
-		for i := 1; i < len(listBucketsRequests); i++ {
-			select {
-			case result := <-listBucketsRequests[0].ResultChan:
-				listBucketsRequests[i].ResultChan <- result
-			case err := <-listBucketsRequests[0].ErrorChan:
-				listBucketsRequests[i].ErrorChan <- err
-			}
-		}
+		b.executeGroupedRequests(ctx, listBucketsRequests)
 	}
 }
 
-// executeRequest executes a single request
-func (b *S3Batcher) executeRequest(ctx context.Context, request *BatchRequest) {
-	log.Printf("Executing request of type: %s", request.Type)
+// executeGroupedRequests executes the first request and distributes the result to all requests in the group
+func (b *S3Batcher) executeGroupedRequests(ctx context.Context, requests []*BatchRequest) {
+	if len(requests) == 0 {
+		return
+	}
 	
-	switch request.Type {
+	// Execute the first request to get the result
+	firstRequest := requests[0]
+	log.Printf("Executing request of type: %s for a group of %d requests", firstRequest.Type, len(requests))
+	
+	switch firstRequest.Type {
 	case TypeGetObject:
 		input := &s3.GetObjectInput{
-			Bucket: &request.BucketName,
-			Key:    &request.Key,
+			Bucket: &firstRequest.BucketName,
+			Key:    &firstRequest.Key,
 		}
 		
-		log.Printf("Attempting GetObject for bucket: %s, key: %s", request.BucketName, request.Key)
 		result, err := b.client.GetObject(ctx, input)
 		if err != nil {
-			log.Printf("GetObject error: %v", err)
-			request.ErrorChan <- err
+			// Send error to all requests
+			for _, req := range requests {
+				req.ErrorChan <- err
+			}
 		} else {
-			request.ResultChan <- result
+			// Send result to all requests
+			for _, req := range requests {
+				req.ResultChan <- result
+			}
 		}
-
+		
 	case TypeListObjects:
-		maxKeys := request.MaxKeys
+		maxKeys := firstRequest.MaxKeys
 		input := &s3.ListObjectsV2Input{
-			Bucket:  &request.BucketName,
-			Prefix:  &request.Prefix,
+			Bucket:  &firstRequest.BucketName,
+			Prefix:  &firstRequest.Prefix,
 			MaxKeys: &maxKeys,
 		}
 		
-		log.Printf("Attempting ListObjects for bucket: %s, prefix: %s", request.BucketName, request.Prefix)
 		result, err := b.client.ListObjectsV2(ctx, input)
 		if err != nil {
-			log.Printf("ListObjects error: %v", err)
-			request.ErrorChan <- err
+			// Send error to all requests
+			for _, req := range requests {
+				req.ErrorChan <- err
+			}
 		} else {
-			request.ResultChan <- result
+			// Send result to all requests
+			for _, req := range requests {
+				req.ResultChan <- result
+			}
 		}
 		
 	case TypeListBuckets:
 		input := &s3.ListBucketsInput{}
 		
-		log.Printf("Attempting ListBuckets")
 		result, err := b.client.ListBuckets(ctx, input)
 		if err != nil {
-			log.Printf("ListBuckets error: %v", err)
-			request.ErrorChan <- err
+			// Send error to all requests
+			for _, req := range requests {
+				req.ErrorChan <- err
+			}
 		} else {
-			request.ResultChan <- result
+			// Send result to all requests
+			for _, req := range requests {
+				req.ResultChan <- result
+			}
 		}
-
+		
 	default:
-		request.ErrorChan <- fmt.Errorf("unsupported request type: %s", request.Type)
+		err := fmt.Errorf("unsupported request type: %s", firstRequest.Type)
+		for _, req := range requests {
+			req.ErrorChan <- err
+		}
 	}
 } 
