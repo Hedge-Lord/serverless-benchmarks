@@ -17,7 +17,7 @@ spec:
       containers:
       - name: batching-agent
         image: s3-batching-agent:latest
-        imagePullPolicy: IfNotPresent  # Use 'Always' in production
+        imagePullPolicy: Never  # Don't try to pull from a registry, use local image only
         ports:
         - containerPort: 8080
           hostPort: 8080  # Expose directly on the node at a fixed port

@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/config"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/gorilla/mux"
 	"github.com/serverless-benchmarks/openwhisk/batching-agent/pkg/batching"
@@ -44,8 +44,8 @@ type BatchingAgent struct {
 // NewBatchingAgent creates a new batching agent
 func NewBatchingAgent(config Configuration) (*BatchingAgent, error) {
 	// Configure AWS SDK
-	cfg, err := config.LoadDefaultConfig(context.Background(), 
-		config.WithRegion(config.AwsRegion),
+	cfg, err := awsconfig.LoadDefaultConfig(context.Background(), 
+		awsconfig.WithRegion(config.AwsRegion),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS configuration: %w", err)

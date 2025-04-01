@@ -3,7 +3,6 @@ package batching
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -159,7 +158,7 @@ func (b *S3Batcher) processBatch(batch []*BatchRequest) {
 	}
 
 	// Process grouped GetObject requests
-	for key, requests := range getObjectRequests {
+	for _, requests := range getObjectRequests {
 		// Execute the first request
 		b.executeRequest(ctx, requests[0])
 		
@@ -175,7 +174,7 @@ func (b *S3Batcher) processBatch(batch []*BatchRequest) {
 	}
 
 	// Process grouped ListObjects requests
-	for key, requests := range listObjectsRequests {
+	for _, requests := range listObjectsRequests {
 		// Execute the first request
 		b.executeRequest(ctx, requests[0])
 		
@@ -224,10 +223,11 @@ func (b *S3Batcher) executeRequest(ctx context.Context, request *BatchRequest) {
 		}
 
 	case TypeListObjects:
+		maxKeys := request.MaxKeys
 		input := &s3.ListObjectsV2Input{
 			Bucket:  &request.BucketName,
 			Prefix:  &request.Prefix,
-			MaxKeys: request.MaxKeys,
+			MaxKeys: &maxKeys,
 		}
 		
 		result, err := b.client.ListObjectsV2(ctx, input)
@@ -248,8 +248,6 @@ func (b *S3Batcher) executeRequest(ctx context.Context, request *BatchRequest) {
 		}
 
 	default:
-		err := fmt.Errorf("unsupported request type: %s", request.Type)
-		log.Printf("Error: %v", err)
-		request.ErrorChan <- err
+		request.ErrorChan <- fmt.Errorf("unsupported request type: %s", request.Type)
 	}
 } 
