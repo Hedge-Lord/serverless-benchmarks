@@ -14,15 +14,6 @@ spec:
       labels:
         app: s3-batching-agent
     spec:
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-            - matchExpressions:
-              - key: kubernetes.io/hostname
-                operator: In
-                values:
-                - node0.ggz-248982.ucla-progsoftsys-pg0.utah.cloudlab.us
       containers:
       - name: batching-agent
         image: localhost:5000/s3-batching-agent:latest
