@@ -6,30 +6,20 @@ import json
 import traceback
 from datetime import datetime, timedelta, timezone
 
-def get_host_ip():
+def get_host_ip(params):
     """Try to determine the host IP address using different methods"""
-    # First try the environment variable set by Kubernetes Downward API
-    host_ip = os.environ.get('BATCHING_AGENT_HOST')
+    # First try the parameter passed from the deployment script
+    host_ip = params.get('BATCHING_AGENT_HOST')
     if host_ip:
         return host_ip
     
-    # Try to get the IP from the Kubernetes API
-    try:
-        # Check if we're running in Kubernetes
-        if os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/token"):
-            # The hostname might contain the pod name which we can use to get the node name
-            hostname = os.environ.get('HOSTNAME', '')
-            
-            # Try to extract node information from hostname or other environment variables
-            # In OpenWhisk, the invoker might have set environment variables we can use
-            for env_var in os.environ:
-                if 'HOST' in env_var or 'NODE' in env_var or 'IP' in env_var:
-                    candidate = os.environ[env_var]
-                    if candidate and '.' in candidate and not candidate.startswith('127.'):
-                        print(f"Found potential host IP in {env_var}: {candidate}")
-                        return candidate
-    except Exception as e:
-        print(f"Error determining host IP from Kubernetes: {str(e)}")
+    # Try to get the IP from environment variables (OpenWhisk might expose these)
+    for env_var in os.environ:
+        if 'HOST' in env_var or 'NODE' in env_var or 'IP' in env_var:
+            candidate = os.environ.get(env_var)
+            if candidate and '.' in candidate and not candidate.startswith('127.'):
+                print(f"Found potential host IP in {env_var}: {candidate}")
+                return candidate
     
     # If all else fails, try to parse the host from the OpenWhisk action URL
     api_host = os.environ.get('__OW_API_HOST', '')
@@ -41,36 +31,36 @@ def get_host_ip():
     # Default to using node0 as fallback
     return "node0.ggz-248982.ucla-progsoftsys-pg0.utah.cloudlab.us"
 
-def main(args):
+def main(params):
     """Main entry point for the OpenWhisk action"""
     start_time = time.time()
     
     try:
         # Get parameters or use defaults
-        num_calls = int(args.get('num_calls', 1))
-        target_bucket = args.get('bucket', 'ow-benchmark-test')
+        num_calls = int(params.get('num_calls', 1))
+        target_bucket = params.get('bucket', 'ow-benchmark-test')
         
         # Get batching agent endpoint 
         # Try to determine the host IP
-        batching_agent_host = get_host_ip()
-        batching_agent_port = os.environ.get('BATCHING_AGENT_PORT', '8080')
+        batching_agent_host = get_host_ip(params)
+        batching_agent_port = params.get('BATCHING_AGENT_PORT', '8080')
         batching_agent_url = f"http://{batching_agent_host}:{batching_agent_port}"
         
         # Print the agent URL for debugging
         print(f"Using batching agent at {batching_agent_url}")
         
-        # Validate AWS credentials (still needed for the batching agent)
-        aws_access_key = os.environ.get('AWS_ACCESS_KEY_ID')
-        aws_secret_key = os.environ.get('AWS_SECRET_ACCESS_KEY')
+        # Validate AWS credentials
+        aws_access_key = params.get('AWS_ACCESS_KEY_ID')
+        aws_secret_key = params.get('AWS_SECRET_ACCESS_KEY')
         if not aws_access_key or not aws_secret_key:
             return {
                 'statusCode': 400,
                 'error': 'Missing AWS credentials',
-                'message': 'AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be provided in environment variables'
+                'message': 'AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be provided'
             }
         
-        # Set AWS credentials from parameters (not used directly but included for compatibility)
-        aws_region = args.get('AWS_REGION', 'us-east-1')
+        # Set AWS region
+        aws_region = params.get('AWS_REGION', 'us-east-1')
         
         # Setup
         end_time = datetime.now(timezone.utc)
