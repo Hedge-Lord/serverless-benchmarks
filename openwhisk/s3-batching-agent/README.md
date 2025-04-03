@@ -22,11 +22,17 @@ By batching multiple identical or similar requests, the agent reduces the number
 
 ### Build and Deploy
 
-1. Build the Docker image:
+1. Build the Docker image on each worker node (for now. Will need to set up a docker registry on each):
 
+Setting up the local registry:
 ```bash
-cd openwhisk/batching-agent
-docker build -t s3-batching-agent:latest .
+docker run -d -p 5000:5000 --restart=always --name registry registry:2
+docker ps
+```
+
+Build the agent:
+```bash
+./build_agent.sh
 ```
 
 2. Create AWS credentials secret:
@@ -40,7 +46,7 @@ echo -n 'YOUR_SECRET_KEY' | base64
 kubectl apply -f kubernetes/secret.yaml
 ```
 
-3. Deploy the DaemonSet:
+3. Deploy the DaemonSet (on master node only):
 
 ```bash
 kubectl apply -f kubernetes/daemonset.yaml
