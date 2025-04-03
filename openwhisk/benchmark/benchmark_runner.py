@@ -180,40 +180,70 @@ def write_results_to_file(results, percentiles, output_file):
     print(f"Results written to {output_file}")
 
 def main():
-    parser = argparse.ArgumentParser(description="OpenWhisk S3 Access Benchmark Runner")
-    parser.add_argument("--action", default="s3-access", help="Name of the OpenWhisk action to invoke")
-    parser.add_argument("--rate", type=int, default=10, help="Rate of invocations per second")
-    parser.add_argument("--invocations", type=int, default=100, help="Number of invocations")
-    parser.add_argument("--calls", type=int, default=1, help="Number of S3 calls per invocation")
-    parser.add_argument("--output", default="benchmark_results.txt", help="Output file for results")
-    parser.add_argument("--bucket", help="Override S3 bucket name from local.env")
-    
+    """Main entry point for the benchmark runner"""
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Run OpenWhisk benchmarks')
+    parser.add_argument('--action', type=str, required=True,
+                      help='Name of the action to benchmark')
+    parser.add_argument('--rate', type=int, default=10,
+                      help='Rate of invocations per second')
+    parser.add_argument('--invocations', type=int, default=100,
+                      help='Total number of invocations to run')
+    parser.add_argument('--calls', type=int, default=1,
+                      help='Number of calls per invocation')
+    parser.add_argument('--env', type=str, default='local.env',
+                      help='Path to environment file')
     args = parser.parse_args()
-    
+
+    # Load environment variables
+    load_env_file(args.env)
+
+    # Get OpenWhisk configuration
+    wsk = os.environ.get('WSK', 'wsk')
+    namespace = os.environ.get('NAMESPACE', 'guest')
+    package = os.environ.get('PACKAGE_NAME', 's3benchmark')
+    action = args.action
+
+    # Print benchmark configuration
     print(f"Starting benchmark at {datetime.datetime.now().isoformat()}")
-    
+    print(f"Running benchmark: {action}, Rate: {args.rate}/sec, "
+          f"Invocations: {args.invocations}, Calls/Invocation: {args.calls}")
+
     # Run the benchmark
-    results = run_benchmark(args.action, args.rate, args.invocations, args.calls)
-    
-    # Calculate percentiles
-    percentiles = calculate_percentiles(results)
-    
+    results = run_benchmark(action, args.rate, args.invocations, args.calls)
+
     # Print summary
     print("\nBenchmark Summary:")
     print(f"Successful invocations: {sum(1 for r in results if r['status'] == 'success')}/{len(results)}")
-    print(f"50th percentile (total time): {percentiles['total_times']['p50']:.2f} ms")
-    print(f"90th percentile (total time): {percentiles['total_times']['p90']:.2f} ms")
-    print(f"99th percentile (total time): {percentiles['total_times']['p99']:.2f} ms")
     
-    if 'action_times' in percentiles:
-        print(f"50th percentile (action time): {percentiles['action_times']['p50']:.2f} ms")
-        print(f"90th percentile (action time): {percentiles['action_times']['p90']:.2f} ms")
-        print(f"99th percentile (action time): {percentiles['action_times']['p99']:.2f} ms")
-    
+    # Only print statistics if we have successful invocations
+    if sum(1 for r in results if r['status'] == 'success') > 0:
+        # Calculate percentiles
+        percentiles = calculate_percentiles(results)
+        
+        # Print statistics
+        print("\nStatistics:")
+        print(f"50th percentile (total time): {percentiles['total_times']['p50']:.2f} ms")
+        print(f"90th percentile (total time): {percentiles['total_times']['p90']:.2f} ms")
+        print(f"95th percentile (total time): {percentiles['total_times']['p99']:.2f} ms")
+        
+        print("\nExecution Times:")
+        print(f"50th percentile (execution): {percentiles['action_times']['p50']:.2f} ms")
+        print(f"90th percentile (execution): {percentiles['action_times']['p90']:.2f} ms")
+        print(f"95th percentile (execution): {percentiles['action_times']['p99']:.2f} ms")
+        
+        print("\nInit Times:")
+        print(f"50th percentile (init): {percentiles['total_times']['p50']:.2f} ms")
+        print(f"90th percentile (init): {percentiles['total_times']['p90']:.2f} ms")
+        print(f"95th percentile (init): {percentiles['total_times']['p99']:.2f} ms")
+    else:
+        print("\nNo successful invocations to calculate statistics from.")
+        print("Check the action logs for error details.")
+
     # Write results to file
-    write_results_to_file(results, percentiles, args.output)
+    write_results_to_file(results, percentiles, "benchmark_results.txt")
     
     print(f"Benchmark completed at {datetime.datetime.now().isoformat()}")
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main() 
