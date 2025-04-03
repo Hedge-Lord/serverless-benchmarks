@@ -11,25 +11,68 @@ def get_host_ip(params):
     # First try the parameter passed from the deployment script
     host_ip = params.get('BATCHING_AGENT_HOST')
     if host_ip:
+        print(f"Using explicitly provided host: {host_ip}")
         return host_ip
     
-    # Try to get the IP from environment variables (OpenWhisk might expose these)
-    for env_var in os.environ:
-        if 'HOST' in env_var or 'NODE' in env_var or 'IP' in env_var:
-            candidate = os.environ.get(env_var)
-            if candidate and '.' in candidate and not candidate.startswith('127.'):
-                print(f"Found potential host IP in {env_var}: {candidate}")
-                return candidate
+    # List of environment variable names to check, in priority order
+    # Kubernetes specifically sets these for pods
+    priority_vars = [
+        'KUBERNETES_NODE_IP',
+        'NODE_IP',
+        'HOST_IP',
+        'KUBERNETES_HOST'
+    ]
     
-    # If all else fails, try to parse the host from the OpenWhisk action URL
-    api_host = os.environ.get('__OW_API_HOST', '')
-    if api_host and '://' in api_host:
-        host = api_host.split('://')[1].split(':')[0]
-        if host and not host.startswith('127.'):
-            return host
+    # Check priority environment variables first
+    for var_name in priority_vars:
+        if var_name in os.environ:
+            ip = os.environ[var_name]
+            print(f"Found potential host IP in {var_name}: {ip}")
+            if test_agent_connection(ip):
+                return ip
+    
+    # Try to extract node info from hostname 
+    hostname = os.environ.get('HOSTNAME', '')
+    if hostname and 'node' in hostname:
+        # Extract node name or number if the format is like wskowdev-invoker-node1-XX
+        parts = hostname.split('-')
+        for part in parts:
+            if part.startswith('node') and len(part) > 4:
+                node_id = part[4:]
+                candidate = f"node{node_id}.ggz-248982.ucla-progsoftsys-pg0.utah.cloudlab.us"
+                print(f"Extracted potential node name from hostname: {candidate}")
+                if test_agent_connection(candidate):
+                    return candidate
+    
+    # If still not found, try common node hostnames
+    nodes = [
+        "node0.ggz-248982.ucla-progsoftsys-pg0.utah.cloudlab.us",
+        "node1.ggz-248982.ucla-progsoftsys-pg0.utah.cloudlab.us"
+    ]
+    
+    for node in nodes:
+        print(f"Trying node {node}")
+        if test_agent_connection(node):
+            return node
     
     # Default to using node0 as fallback
+    print("Using default node0 as fallback")
     return "node0.ggz-248982.ucla-progsoftsys-pg0.utah.cloudlab.us"
+
+def test_agent_connection(host, port='8080'):
+    """Test if the batching agent is accessible at the given host:port"""
+    try:
+        url = f"http://{host}:{port}/health"
+        print(f"Testing connection to {url}")
+        
+        response = requests.get(url, timeout=1)
+        if response.status_code == 200:
+            print(f"Successfully connected to agent at {host}:{port}")
+            return True
+    except Exception as e:
+        print(f"Failed to connect to {host}:{port}: {str(e)}")
+    
+    return False
 
 def main(params):
     """Main entry point for the OpenWhisk action"""
