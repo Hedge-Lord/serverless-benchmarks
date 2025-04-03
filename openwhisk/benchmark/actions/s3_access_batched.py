@@ -6,73 +6,82 @@ import json
 import traceback
 from datetime import datetime, timedelta, timezone
 
-def get_host_ip(params):
-    """Try to determine the host IP address using different methods"""
-    # First try the parameter passed from the deployment script
-    host_ip = params.get('BATCHING_AGENT_HOST')
-    if host_ip:
-        print(f"Using explicitly provided host: {host_ip}")
-        return host_ip
-    
-    # List of environment variable names to check, in priority order
-    # Kubernetes specifically sets these for pods
-    priority_vars = [
-        'KUBERNETES_NODE_IP',
-        'NODE_IP',
-        'HOST_IP',
-        'KUBERNETES_HOST'
-    ]
-    
-    # Check priority environment variables first
-    for var_name in priority_vars:
-        if var_name in os.environ:
-            ip = os.environ[var_name]
-            print(f"Found potential host IP in {var_name}: {ip}")
-            if test_agent_connection(ip):
-                return ip
-    
-    # Try to extract node info from hostname 
-    hostname = os.environ.get('HOSTNAME', '')
-    if hostname and 'node' in hostname:
-        # Extract node name or number if the format is like wskowdev-invoker-node1-XX
-        parts = hostname.split('-')
-        for part in parts:
-            if part.startswith('node') and len(part) > 4:
-                node_id = part[4:]
-                candidate = f"node{node_id}.ggz-248982.ucla-progsoftsys-pg0.utah.cloudlab.us"
-                print(f"Extracted potential node name from hostname: {candidate}")
-                if test_agent_connection(candidate):
-                    return candidate
-    
-    # If still not found, try common node hostnames
-    nodes = [
-        "node0.ggz-248982.ucla-progsoftsys-pg0.utah.cloudlab.us",
-        "node1.ggz-248982.ucla-progsoftsys-pg0.utah.cloudlab.us"
-    ]
-    
-    for node in nodes:
-        print(f"Trying node {node}")
-        if test_agent_connection(node):
-            return node
-    
-    # Default to using node0 as fallback
-    print("Using default node0 as fallback")
-    return "node0.ggz-248982.ucla-progsoftsys-pg0.utah.cloudlab.us"
+# Cache the node IP after first successful lookup
+_cached_node_ip = None
 
-def test_agent_connection(host, port='8080'):
-    """Test if the batching agent is accessible at the given host:port"""
-    try:
-        url = f"http://{host}:{port}/health"
-        print(f"Testing connection to {url}")
-        
-        response = requests.get(url, timeout=1)
-        if response.status_code == 200:
-            print(f"Successfully connected to agent at {host}:{port}")
-            return True
-    except Exception as e:
-        print(f"Failed to connect to {host}:{port}: {str(e)}")
+def get_node_ip():
+    """Get the node IP by querying the Kubernetes API directly"""
+    global _cached_node_ip
     
-    return False
+    # Return cached IP if available
+    if _cached_node_ip is not None:
+        print(f"Using cached node IP: {_cached_node_ip}")
+        return _cached_node_ip
+    
+    try:
+        # Get the pod name from hostname
+        pod_name = os.environ.get('HOSTNAME')
+        if not pod_name:
+            print("HOSTNAME environment variable not found")
+            return None
+
+        # Get the service account token
+        token_path = '/var/run/secrets/kubernetes.io/serviceaccount/token'
+        if not os.path.exists(token_path):
+            print(f"Service account token not found at {token_path}")
+            return None
+
+        with open(token_path, 'r') as f:
+            token = f.read().strip()
+
+        # Get the CA certificate path
+        ca_cert = '/var/run/secrets/kubernetes.io/serviceaccount/ca.crt'
+        if not os.path.exists(ca_cert):
+            print(f"CA certificate not found at {ca_cert}")
+            return None
+
+        # Get the Kubernetes service host
+        k8s_host = os.environ.get('KUBERNETES_SERVICE_HOST')
+        if not k8s_host:
+            print("KUBERNETES_SERVICE_HOST environment variable not found")
+            return None
+
+        # Get the namespace
+        namespace_path = '/var/run/secrets/kubernetes.io/serviceaccount/namespace'
+        if not os.path.exists(namespace_path):
+            print(f"Namespace file not found at {namespace_path}")
+            return None
+
+        with open(namespace_path, 'r') as f:
+            namespace = f.read().strip()
+
+        # Construct the API URL
+        api_url = f'https://{k8s_host}/api/v1/namespaces/{namespace}/pods/{pod_name}'
+        
+        # Make the request
+        headers = {'Authorization': f'Bearer {token}'}
+        response = requests.get(api_url, headers=headers, verify=ca_cert, timeout=5)
+        
+        if response.status_code != 200:
+            print(f"Failed to get pod info: {response.status_code} - {response.text}")
+            return None
+
+        # Parse the response
+        pod_info = response.json()
+        node_ip = pod_info.get('status', {}).get('hostIP')
+        
+        if not node_ip:
+            print("No hostIP found in pod status")
+            return None
+
+        print(f"Successfully retrieved node IP: {node_ip}")
+        # Cache the IP for future invocations
+        _cached_node_ip = node_ip
+        return node_ip
+
+    except Exception as e:
+        print(f"Error getting node IP: {str(e)}")
+        return None
 
 def main(params):
     """Main entry point for the OpenWhisk action"""
@@ -84,8 +93,11 @@ def main(params):
         target_bucket = params.get('bucket', 'ow-benchmark-test')
         
         # Get batching agent endpoint 
-        # Try to determine the host IP
-        batching_agent_host = get_host_ip(params)
+        batching_agent_host = get_node_ip()
+        if not batching_agent_host:
+            print("Failed to get node IP, using default")
+            batching_agent_host = "node0.ggz-248982.ucla-progsoftsys-pg0.utah.cloudlab.us"
+            
         batching_agent_port = params.get('BATCHING_AGENT_PORT', '8080')
         batching_agent_url = f"http://{batching_agent_host}:{batching_agent_port}"
         

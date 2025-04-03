@@ -41,6 +41,10 @@ S3_BUCKET=your_bucket_name
 OPENWHISK_APIHOST=your_openwhisk_host
 OPENWHISK_AUTH=your_auth_key
 ```
+3. (For batching agent discovery) modify the RBAC so pods can discover the current node's IP:
+```bash
+kubectl apply -f pod-reader.yaml
+```
 
 ### Installation
 
