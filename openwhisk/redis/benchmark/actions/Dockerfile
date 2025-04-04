@@ -5,9 +5,18 @@ WORKDIR /app
 # Install necessary packages
 RUN apk add --no-cache git
 
-# Copy go.mod and go.sum
+# Copy go.mod initially 
 COPY go.mod ./
+
+# Initialize module and ensure go.sum is properly generated
+RUN go mod tidy
 RUN go mod download
+
+# Explicitly get the Redis package
+RUN go get github.com/redis/go-redis/v9
+
+# Force vendoring of dependencies to ensure they are all accessible
+RUN go mod vendor
 
 # Copy source code
 COPY redis_benchmark.go ./

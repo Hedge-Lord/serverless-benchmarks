@@ -21,12 +21,23 @@ cd "$(dirname "$0")/actions"
 
 # Build the Docker image
 echo "Building Docker image..."
-docker build -t ${DOCKER_IMAGE} .
+if ! docker build -t ${DOCKER_IMAGE} .; then
+  echo "Docker build failed. Please check the error messages above."
+  exit 1
+fi
 
 # Tag and push to local registry
 echo "Pushing to local registry..."
-docker tag ${DOCKER_IMAGE} ${REGISTRY_IMAGE}
-docker push ${REGISTRY_IMAGE}
+if ! docker tag ${DOCKER_IMAGE} ${REGISTRY_IMAGE}; then
+  echo "Failed to tag the Docker image."
+  exit 1
+fi
+
+if ! docker push ${REGISTRY_IMAGE}; then
+  echo "Failed to push to local registry. Is the registry running?"
+  echo "You can start a local registry with: docker run -d -p 5000:5000 --name registry registry:2"
+  exit 1
+fi
 
 # Create or update package
 echo "Creating/updating package..."
