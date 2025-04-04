@@ -12,4 +12,7 @@ spec:
   - name: http
     port: 8080
     targetPort: 8080
-  type: ClusterIP 
+  # This is a headless service (no ClusterIP) allowing direct access to the pods
+  clusterIP: None
+  # We use headless service so containers can access the agent on their local node
+  # This works together with hostNetwork: true in the DaemonSet 

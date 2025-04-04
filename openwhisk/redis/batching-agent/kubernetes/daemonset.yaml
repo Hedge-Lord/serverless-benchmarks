@@ -20,6 +20,7 @@ spec:
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
+          hostPort: 8080  # Expose directly on the node at a fixed port
         env:
         - name: REDIS_HOST
           value: "redis-master"  # Replace with your actual Redis host
@@ -29,6 +30,14 @@ spec:
           value: "100ms"
         - name: MAX_BATCH_SIZE
           value: "10"
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: NODE_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
         resources:
           limits:
             cpu: "500m"
@@ -47,4 +56,6 @@ spec:
             path: /health
             port: 8080
           initialDelaySeconds: 5
-          periodSeconds: 10 
+          periodSeconds: 10
+      hostNetwork: true  # Use host networking
+      dnsPolicy: ClusterFirstWithHostNet 
