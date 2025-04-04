@@ -5,9 +5,8 @@ set -e
 # Configuration variables
 ACTION_NAME="redis_benchmark"
 PACKAGE_NAME="redis_benchmark"
-DOCKER_IMAGE="redis-benchmark:latest"
 REGISTRY_HOST="localhost:5000"
-REGISTRY_IMAGE="${REGISTRY_HOST}/${DOCKER_IMAGE}"
+REGISTRY_IMAGE="${REGISTRY_HOST}/redis-benchmark:latest"
 
 # Check if REDIS_HOST is provided
 if [ -z "$REDIS_HOST" ]; then
@@ -28,27 +27,12 @@ else
   echo "No specific batching agent host provided, the action will auto-detect the host if batching is enabled."
 fi
 
-# Navigate to the actions directory
-cd "$(dirname "$0")/actions"
-
-# Build the Docker image
-echo "Building Docker image..."
-if ! docker build --no-cache -t ${DOCKER_IMAGE} .; then
-  echo "Docker build failed. Please check the error messages above."
-  exit 1
-fi
-
-# Tag and push to local registry
-echo "Pushing to local registry..."
-if ! docker tag ${DOCKER_IMAGE} ${REGISTRY_IMAGE}; then
-  echo "Failed to tag the Docker image."
-  exit 1
-fi
-
-if ! docker push ${REGISTRY_IMAGE}; then
-  echo "Failed to push to local registry. Is the registry running?"
-  echo "You can start a local registry with: docker run -d -p 5000:5000 --name registry registry:2"
-  exit 1
+# Check if the image exists in the registry
+echo "Verifying image exists in registry..."
+if ! curl -s "http://${REGISTRY_HOST}/v2/redis-benchmark/tags/list" | grep -q "latest"; then
+  echo "Warning: Image ${REGISTRY_IMAGE} not found in registry."
+  echo "Make sure build.sh has been run on all worker nodes before deploying."
+  echo "Continuing with deployment anyway..."
 fi
 
 # Create or update package
