@@ -2,9 +2,14 @@ FROM golang:1.20-alpine AS builder
 
 WORKDIR /app
 
-# Copy go.mod and go.sum files
+# Install necessary tools
+RUN apk add --no-cache git
+
+# Copy go.mod file
 COPY go.mod ./
-RUN go mod download
+
+# Initialize the module and download dependencies
+RUN go mod download && go mod tidy
 
 # Copy source code
 COPY . .
