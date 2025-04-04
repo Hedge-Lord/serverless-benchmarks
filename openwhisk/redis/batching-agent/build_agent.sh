@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
 
+go mod tidy
+
 echo "Building Redis batching agent Docker image with no cache..."
 docker build --no-cache -t redis-batching-agent:latest .
 
