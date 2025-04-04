@@ -33,7 +33,7 @@ cd "$(dirname "$0")/actions"
 
 # Build the Docker image
 echo "Building Docker image..."
-if ! docker build -t ${DOCKER_IMAGE} .; then
+if ! docker build --no-cache -t ${DOCKER_IMAGE} .; then
   echo "Docker build failed. Please check the error messages above."
   exit 1
 fi
