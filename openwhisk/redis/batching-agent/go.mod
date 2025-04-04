@@ -1,6 +1,6 @@
 module github.com/serverless-benchmarks/redis-batching-agent
 
-go 1.20
+go 1.22
 
 require (
 	github.com/redis/go-redis/v9 v9.0.3
