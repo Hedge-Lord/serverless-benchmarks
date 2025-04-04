@@ -15,14 +15,11 @@ RUN go mod download
 # Explicitly get the Redis package
 RUN go get github.com/redis/go-redis/v9
 
-# Force vendoring of dependencies to ensure they are all accessible
-RUN go mod vendor
-
 # Copy source code
 COPY redis_benchmark.go ./
 
-# Build the binary
-RUN CGO_ENABLED=0 GOOS=linux go build -o redis-benchmark redis_benchmark.go
+# Build the binary - explicitly disable vendor mode
+RUN CGO_ENABLED=0 GOOS=linux go build -mod=mod -o redis-benchmark redis_benchmark.go
 
 # Runtime image
 FROM openwhisk/dockerskeleton
