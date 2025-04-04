@@ -1,10 +1,10 @@
 module github.com/serverless-benchmarks/redis-batching-agent
 
-go 1.22
+go 1.23
 
 require (
 	github.com/redis/go-redis/v9 v9.0.3
-	github.com/valyala/fasthttp v1.58.0
+	github.com/valyala/fasthttp v1.60.0
 	golang.org/x/net v0.31.0
 )
 
