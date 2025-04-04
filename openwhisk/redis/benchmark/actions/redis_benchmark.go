@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"crypto/tls"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -63,7 +64,15 @@ type OperationResult struct {
 func getNodeIP() (string, error) {
 	var err error
 	nodeIPOnce.Do(func() {
-		// Try to get the node IP using the Kubernetes API
+		// First check if batching_agent_host was provided as a parameter
+		batchingHost := os.Getenv("BATCHING_AGENT_HOST")
+		if batchingHost != "" {
+			log.Printf("Using BATCHING_AGENT_HOST environment variable: %s", batchingHost)
+			cachedNodeIP = batchingHost
+			return
+		}
+		
+		// Then try to get the node IP using the Kubernetes API
 		var ip string
 		ip, err = fetchNodeIPFromKubernetesAPI()
 		if err == nil && ip != "" {
@@ -71,6 +80,7 @@ func getNodeIP() (string, error) {
 			cachedNodeIP = ip
 			return
 		}
+		log.Printf("Failed to get node IP from Kubernetes API: %v, trying fallbacks", err)
 		
 		// Fallback: check for environment variables
 		ip = os.Getenv("NODE_IP")
@@ -80,9 +90,19 @@ func getNodeIP() (string, error) {
 			return
 		}
 		
-		// Final fallback: use a default hostname
-		cachedNodeIP = "node0.ggz-248982.ucla-progsoftsys-pg0.utah.cloudlab.us"
-		log.Printf("Using default node hostname: %s", cachedNodeIP)
+		// Try other common environment variables
+		for _, envVar := range []string{"KUBERNETES_NODE_IP", "HOST_IP", "HOSTNAME"} {
+			ip = os.Getenv(envVar)
+			if ip != "" {
+				log.Printf("Using %s environment variable: %s", envVar, ip)
+				cachedNodeIP = ip
+				return
+			}
+		}
+		
+		// Final fallback: use a default hostname for the node
+		cachedNodeIP = "localhost"
+		log.Printf("No node IP could be determined. Using default: %s", cachedNodeIP)
 	})
 	
 	if cachedNodeIP == "" {
@@ -136,12 +156,13 @@ func fetchNodeIPFromKubernetesAPI() (string, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+string(token))
 	
-	// Configure TLS with CA cert
-	tr := &http.Transport{}
-	// Skip TLS verification in this example
-	// In production, you should properly verify with the CA cert
-	// from /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+	// Configure TLS to skip verification
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
 	client := &http.Client{Transport: tr}
+	
+	log.Printf("Attempting to query Kubernetes API at: %s", url)
 	
 	// Send request
 	resp, err := client.Do(req)
@@ -151,7 +172,8 @@ func fetchNodeIPFromKubernetesAPI() (string, error) {
 	defer resp.Body.Close()
 	
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("failed to get pod info: %s", resp.Status)
+		bodyBytes, _ := ioutil.ReadAll(resp.Body)
+		return "", fmt.Errorf("failed to get pod info: status %s, body: %s", resp.Status, string(bodyBytes))
 	}
 	
 	// Parse response
@@ -301,6 +323,7 @@ func runBenchmark(config Configuration) Response {
 		
 		// If host not provided, detect node IP
 		if batchingHost == "" {
+			log.Printf("No batching agent host provided, attempting to auto-detect")
 			var err error
 			batchingHost, err = getNodeIP()
 			if err != nil {
@@ -308,6 +331,9 @@ func runBenchmark(config Configuration) Response {
 				response.Error = fmt.Sprintf("Failed to get node IP: %v", err)
 				return response
 			}
+			log.Printf("Auto-detected batching agent host: %s", batchingHost)
+		} else {
+			log.Printf("Using provided batching agent host: %s", batchingHost)
 		}
 		
 		// Use default port if not provided
@@ -318,6 +344,21 @@ func runBenchmark(config Configuration) Response {
 		batchingURL = fmt.Sprintf("http://%s:%s", batchingHost, batchingPort)
 		response.BatchingURL = batchingURL
 		log.Printf("Using Redis batching agent at %s", batchingURL)
+		
+		// Test the connection to the batching agent
+		testURL := fmt.Sprintf("%s/health", batchingURL)
+		client := &http.Client{Timeout: 2 * time.Second}
+		resp, err := client.Get(testURL)
+		if err != nil {
+			log.Printf("Warning: Failed to connect to batching agent health endpoint: %v", err)
+		} else {
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				log.Printf("Warning: Batching agent health check returned non-OK status: %d", resp.StatusCode)
+			} else {
+				log.Printf("Successfully connected to batching agent at %s", batchingURL)
+			}
+		}
 	} else {
 		// Direct Redis access
 		redisHost := config.RedisHost
@@ -492,11 +533,15 @@ func main() {
 	if val, ok := params["batching_agent_host"]; ok {
 		if host, ok := val.(string); ok {
 			config.BatchingHost = host
+			// Set env var for getNodeIP to use
+			os.Setenv("BATCHING_AGENT_HOST", host)
 		}
 	} else if val, ok := params["BATCHING_AGENT_HOST"]; ok {
 		// Backward compatibility with environment variable style
 		if host, ok := val.(string); ok {
 			config.BatchingHost = host
+			// Set env var for getNodeIP to use
+			os.Setenv("BATCHING_AGENT_HOST", host)
 		}
 	}
 	
