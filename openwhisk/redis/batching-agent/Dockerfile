@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Copy go.mod and go.sum files
 COPY go.mod ./
-# RUN go mod download
+RUN go mod download
 
 # Copy source code
 COPY . .
@@ -24,4 +24,4 @@ COPY --from=builder /app/redis-batching-agent /app/
 EXPOSE 8080
 
 # Command to run
-CMD ["/app/redis-batching-agent"] 
+CMD ["/app/redis-batching-agent", "--redis-host", "${REDIS_HOST:-localhost}", "--redis-port", "${REDIS_PORT:-6379}"] 

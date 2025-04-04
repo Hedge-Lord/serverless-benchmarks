@@ -1,12 +1,10 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -14,436 +12,481 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gorilla/mux"
-	"github.com/serverless-benchmarks/redis-batching-agent/pkg/batching"
+	"github.com/redis/go-redis/v9"
+	"github.com/valyala/fasthttp"
+	"golang.org/x/net/context"
 )
 
-// Set up logging to stderr to ensure we see output even if stdout is buffered
-func init() {
-	log.SetOutput(os.Stderr)
-	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
-	log.Println("Redis Batching Agent initialized")
-}
-
-// Configuration holds the agent's configuration
+// Configuration for the agent
 type Configuration struct {
-	Port            int
-	BatchingEnabled bool
-	BatchWindow     time.Duration
-	MaxBatchSize    int
-	DebugMode       bool
-	RedisHost       string
-	RedisPort       string
-	RedisPassword   string
-	RedisPoolSize   int
+	Port           int
+	BatchWindow    time.Duration
+	MaxBatchSize   int
+	RedisHost      string
+	RedisPort      string
+	RedisPassword  string
+	RedisPoolSize  int
 }
 
-// BatchingAgent handles Redis requests and batches them
-type BatchingAgent struct {
-	config   Configuration
-	batcher  *batching.RedisBatcher
-	server   *http.Server
-	router   *mux.Router
-	mu       sync.Mutex
+// Operation types
+type OpType string
+const (
+	TypeGet OpType = "get"
+	TypeSet OpType = "set"
+	TypeDel OpType = "del"
+)
+
+// Request represents a Redis operation request
+type Request struct {
+	Type     OpType
+	Key      string
+	Value    string
+	ResultCh chan Result
 }
 
-// NewBatchingAgent creates a new batching agent
-func NewBatchingAgent(config Configuration) (*BatchingAgent, error) {
-	// Debug: Print configuration
-	log.Printf("Creating Redis batching agent with configuration:")
-	log.Printf("  Redis Host: %s", config.RedisHost)
-	log.Printf("  Redis Port: %s", config.RedisPort)
-	log.Printf("  Batching Enabled: %v", config.BatchingEnabled)
-	log.Printf("  Batch Window: %v", config.BatchWindow)
-	log.Printf("  Max Batch Size: %d", config.MaxBatchSize)
-
-	// Create router and server
-	router := mux.NewRouter()
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", config.Port),
-		Handler: router,
-	}
-
-	// Create agent
-	agent := &BatchingAgent{
-		config:  config,
-		router:  router,
-		server:  server,
-	}
-
-	// Initialize batcher
-	agent.batcher = batching.NewRedisBatcher(
-		config.RedisHost,
-		config.RedisPort,
-		config.RedisPassword,
-		config.RedisPoolSize,
-		config.BatchingEnabled,
-		config.BatchWindow,
-		config.MaxBatchSize,
-	)
-
-	// Set up routes
-	agent.setupRoutes()
-
-	return agent, nil
+// Result represents the result of a Redis operation
+type Result struct {
+	Value string
+	Error error
 }
 
-// setupRoutes configures the HTTP routes
-func (a *BatchingAgent) setupRoutes() {
-	// Health check
-	a.router.HandleFunc("/health", a.handleHealth).Methods("GET")
+// Batcher handles batching Redis operations
+type Batcher struct {
+	client       *redis.Client
+	requests     chan *Request
+	batchWindow  time.Duration
+	maxBatchSize int
+	wg           sync.WaitGroup
+	shutdown     chan struct{}
+}
 
-	// Redis API endpoints
-	a.router.HandleFunc("/redis/get", a.handleGet).Methods("GET")
-	a.router.HandleFunc("/redis/set", a.handleSet).Methods("POST")
-	a.router.HandleFunc("/redis/del", a.handleDel).Methods("DELETE")
-	a.router.HandleFunc("/redis/exists", a.handleExists).Methods("GET")
+// NewBatcher creates a new Redis batcher
+func NewBatcher(config Configuration) (*Batcher, error) {
+	// Create Redis client
+	client := redis.NewClient(&redis.Options{
+		Addr:     fmt.Sprintf("%s:%s", config.RedisHost, config.RedisPort),
+		Password: config.RedisPassword,
+		PoolSize: config.RedisPoolSize,
+	})
 
-	// Debug endpoints
-	if a.config.DebugMode {
-		a.router.HandleFunc("/debug/config", a.handleDebugConfig).Methods("GET")
+	// Verify connection
+	ctx := context.Background()
+	if err := client.Ping(ctx).Err(); err != nil {
+		return nil, fmt.Errorf("Redis connection failed: %v", err)
 	}
+
+	log.Printf("Redis connection successful to %s:%s", config.RedisHost, config.RedisPort)
+
+	batcher := &Batcher{
+		client:       client,
+		requests:     make(chan *Request, config.MaxBatchSize*10), // Buffer to handle spikes
+		batchWindow:  config.BatchWindow,
+		maxBatchSize: config.MaxBatchSize,
+		shutdown:     make(chan struct{}),
+	}
+
+	// Start the processing goroutine
+	batcher.wg.Add(1)
+	go batcher.processRequests()
+
+	return batcher, nil
+}
+
+// Submit adds a request to the batching queue
+func (b *Batcher) Submit(req *Request) {
+	select {
+	case b.requests <- req:
+		// Request successfully added to queue
+	case <-b.shutdown:
+		// Batcher is shutting down
+		req.ResultCh <- Result{Error: fmt.Errorf("batcher is shutting down")}
+	}
+}
+
+// Shutdown stops the batcher gracefully
+func (b *Batcher) Shutdown() error {
+	close(b.shutdown)
+	b.wg.Wait()
+	return b.client.Close()
+}
+
+// processRequests processes batches of requests
+func (b *Batcher) processRequests() {
+	defer b.wg.Done()
+
+	for {
+		select {
+		case <-b.shutdown:
+			return
+		default:
+			b.processBatch()
+		}
+	}
+}
+
+// processBatch collects and executes a batch of requests
+func (b *Batcher) processBatch() {
+	ctx := context.Background()
+	batch := make([]*Request, 0, b.maxBatchSize)
+	timer := time.NewTimer(b.batchWindow)
+
+	// Wait for first request or exit if shutdown is signaled
+	select {
+	case req := <-b.requests:
+		batch = append(batch, req)
+		timer.Reset(b.batchWindow)
+	case <-b.shutdown:
+		timer.Stop()
+		return
+	}
+
+	// Collect requests until batch is full or window expires
+collectLoop:
+	for len(batch) < b.maxBatchSize {
+		select {
+		case req := <-b.requests:
+			batch = append(batch, req)
+		case <-timer.C:
+			break collectLoop
+		case <-b.shutdown:
+			timer.Stop()
+			for _, req := range batch {
+				req.ResultCh <- Result{Error: fmt.Errorf("batcher is shutting down")}
+			}
+			return
+		}
+	}
+
+	timer.Stop()
+
+	// Process the batch with pipelining
+	if len(batch) > 0 {
+		log.Printf("Processing batch of %d requests", len(batch))
+		
+		// Create a pipeline
+		pipe := b.client.Pipeline()
+		
+		// Group requests by type for tracking
+		getRequests := make(map[int]*Request)
+		setRequests := make(map[int]*Request)
+		delRequests := make(map[int]*Request)
+		
+		// Add commands to pipeline
+		for i, req := range batch {
+			switch req.Type {
+			case TypeGet:
+				getRequests[i] = req
+				pipe.Get(ctx, req.Key)
+			case TypeSet:
+				setRequests[i] = req
+				pipe.Set(ctx, req.Key, req.Value, 0)
+			case TypeDel:
+				delRequests[i] = req
+				pipe.Del(ctx, req.Key)
+			}
+		}
+		
+		// Execute pipeline
+		results, err := pipe.Exec(ctx)
+		
+		// If there was a global error, return it to all requesters
+		if err != nil && err != redis.Nil {
+			log.Printf("Pipeline execution error: %v", err)
+			for _, req := range batch {
+				req.ResultCh <- Result{Error: err}
+			}
+			return
+		}
+		
+		// Process results
+		for i, result := range results {
+			switch {
+			case i < len(getRequests):
+				req := getRequests[i]
+				if result.Err() != nil && result.Err() != redis.Nil {
+					req.ResultCh <- Result{Error: result.Err()}
+				} else {
+					value, _ := result.(*redis.StringCmd).Result()
+					req.ResultCh <- Result{Value: value}
+				}
+			case i < len(getRequests) + len(setRequests):
+				req := setRequests[i-len(getRequests)]
+				if result.Err() != nil {
+					req.ResultCh <- Result{Error: result.Err()}
+				} else {
+					req.ResultCh <- Result{Value: "OK"}
+				}
+			case i < len(getRequests) + len(setRequests) + len(delRequests):
+				req := delRequests[i-len(getRequests)-len(setRequests)]
+				if result.Err() != nil {
+					req.ResultCh <- Result{Error: result.Err()}
+				} else {
+					count, _ := result.(*redis.IntCmd).Result()
+					req.ResultCh <- Result{Value: strconv.FormatInt(count, 10)}
+				}
+			}
+		}
+	}
+}
+
+// Server handles HTTP requests
+type Server struct {
+	batcher *Batcher
+	server  *fasthttp.Server
+}
+
+// NewServer creates a new HTTP server
+func NewServer(batcher *Batcher, port int) *Server {
+	server := &Server{
+		batcher: batcher,
+	}
+
+	// Create fasthttp server
+	server.server = &fasthttp.Server{
+		Handler: server.handleRequest,
+		Name:    "Redis Batching Agent",
+	}
+
+	return server
 }
 
 // Start starts the HTTP server
-func (a *BatchingAgent) Start() {
-	go func() {
-		log.Printf("Starting Redis batching agent on port %d", a.config.Port)
-		if err := a.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Failed to start server: %v", err)
-		}
-	}()
+func (s *Server) Start(port int) error {
+	log.Printf("Starting server on port %d", port)
+	return s.server.ListenAndServe(fmt.Sprintf(":%d", port))
 }
 
-// Shutdown gracefully shuts down the agent
-func (a *BatchingAgent) Shutdown(ctx context.Context) {
-	a.batcher.Shutdown()
-	if err := a.server.Shutdown(ctx); err != nil {
-		log.Printf("Error shutting down server: %v", err)
+// Shutdown stops the HTTP server
+func (s *Server) Shutdown() error {
+	return s.server.Shutdown()
+}
+
+// handleRequest routes incoming HTTP requests
+func (s *Server) handleRequest(ctx *fasthttp.RequestCtx) {
+	path := string(ctx.Path())
+	method := string(ctx.Method())
+
+	switch {
+	case path == "/health" && method == "GET":
+		s.handleHealth(ctx)
+	case path == "/redis/get" && method == "GET":
+		s.handleGet(ctx)
+	case path == "/redis/set" && method == "POST":
+		s.handleSet(ctx)
+	case path == "/redis/del" && method == "DELETE":
+		s.handleDel(ctx)
+	default:
+		ctx.Error("Not Found", fasthttp.StatusNotFound)
 	}
 }
 
-// Handler functions
-
-func (a *BatchingAgent) handleHealth(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
+// handleHealth handles health check requests
+func (s *Server) handleHealth(ctx *fasthttp.RequestCtx) {
+	ctx.SetStatusCode(fasthttp.StatusOK)
+	ctx.SetBodyString("OK")
 }
 
-func (a *BatchingAgent) handleGet(w http.ResponseWriter, r *http.Request) {
-	key := r.URL.Query().Get("key")
+// handleGet handles GET requests
+func (s *Server) handleGet(ctx *fasthttp.RequestCtx) {
+	key := string(ctx.QueryArgs().Peek("key"))
 	if key == "" {
-		http.Error(w, "Missing required parameter: key", http.StatusBadRequest)
+		ctx.Error("Missing required parameter: key", fasthttp.StatusBadRequest)
 		return
 	}
 
-	resultChan := make(chan any, 1)
-	errorChan := make(chan error, 1)
-
-	// Create a batch request
-	request := &batching.BatchRequest{
-		Type:       batching.TypeGet,
-		Key:        key,
-		ResultChan: resultChan,
-		ErrorChan:  errorChan,
+	resultCh := make(chan Result, 1)
+	req := &Request{
+		Type:     TypeGet,
+		Key:      key,
+		ResultCh: resultCh,
 	}
 
-	// Submit the request
-	a.batcher.Submit(request)
+	s.batcher.Submit(req)
+	result := <-resultCh
 
-	// Wait for the result
-	select {
-	case result := <-resultChan:
-		resp, ok := result.(string)
-		if !ok {
-			http.Error(w, "Invalid response type", http.StatusInternalServerError)
-			return
-		}
-
-		// Marshal the response
-		jsonData, err := json.Marshal(map[string]string{"value": resp})
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Failed to marshal response: %v", err), http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(jsonData)
-
-	case err := <-errorChan:
-		http.Error(w, fmt.Sprintf("Failed to get value: %v", err), http.StatusInternalServerError)
-	}
-}
-
-func (a *BatchingAgent) handleSet(w http.ResponseWriter, r *http.Request) {
-	key := r.URL.Query().Get("key")
-	if key == "" {
-		http.Error(w, "Missing required parameter: key", http.StatusBadRequest)
+	if result.Error != nil {
+		ctx.Error(fmt.Sprintf("Failed to get value: %v", result.Error), fasthttp.StatusInternalServerError)
 		return
 	}
 
-	value := r.URL.Query().Get("value")
-	if value == "" {
-		http.Error(w, "Missing required parameter: value", http.StatusBadRequest)
-		return
-	}
-
-	resultChan := make(chan any, 1)
-	errorChan := make(chan error, 1)
-
-	// Create a batch request
-	request := &batching.BatchRequest{
-		Type:       batching.TypeSet,
-		Key:        key,
-		Value:      value,
-		ResultChan: resultChan,
-		ErrorChan:  errorChan,
-	}
-
-	// Submit the request
-	a.batcher.Submit(request)
-
-	// Wait for the result
-	select {
-	case result := <-resultChan:
-		resp, ok := result.(string)
-		if !ok {
-			http.Error(w, "Invalid response type", http.StatusInternalServerError)
-			return
-		}
-
-		// Marshal the response
-		jsonData, err := json.Marshal(map[string]string{"result": resp})
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Failed to marshal response: %v", err), http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(jsonData)
-
-	case err := <-errorChan:
-		http.Error(w, fmt.Sprintf("Failed to set value: %v", err), http.StatusInternalServerError)
-	}
-}
-
-func (a *BatchingAgent) handleDel(w http.ResponseWriter, r *http.Request) {
-	key := r.URL.Query().Get("key")
-	if key == "" {
-		http.Error(w, "Missing required parameter: key", http.StatusBadRequest)
-		return
-	}
-
-	resultChan := make(chan any, 1)
-	errorChan := make(chan error, 1)
-
-	// Create a batch request
-	request := &batching.BatchRequest{
-		Type:       batching.TypeDel,
-		Key:        key,
-		ResultChan: resultChan,
-		ErrorChan:  errorChan,
-	}
-
-	// Submit the request
-	a.batcher.Submit(request)
-
-	// Wait for the result
-	select {
-	case result := <-resultChan:
-		resp, ok := result.(int64)
-		if !ok {
-			http.Error(w, "Invalid response type", http.StatusInternalServerError)
-			return
-		}
-
-		// Marshal the response
-		jsonData, err := json.Marshal(map[string]int64{"deleted": resp})
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Failed to marshal response: %v", err), http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(jsonData)
-
-	case err := <-errorChan:
-		http.Error(w, fmt.Sprintf("Failed to delete key: %v", err), http.StatusInternalServerError)
-	}
-}
-
-func (a *BatchingAgent) handleExists(w http.ResponseWriter, r *http.Request) {
-	key := r.URL.Query().Get("key")
-	if key == "" {
-		http.Error(w, "Missing required parameter: key", http.StatusBadRequest)
-		return
-	}
-
-	resultChan := make(chan any, 1)
-	errorChan := make(chan error, 1)
-
-	// Create a batch request
-	request := &batching.BatchRequest{
-		Type:       batching.TypeExists,
-		Key:        key,
-		ResultChan: resultChan,
-		ErrorChan:  errorChan,
-	}
-
-	// Submit the request
-	a.batcher.Submit(request)
-
-	// Wait for the result
-	select {
-	case result := <-resultChan:
-		resp, ok := result.(int64)
-		if !ok {
-			http.Error(w, "Invalid response type", http.StatusInternalServerError)
-			return
-		}
-
-		exists := resp > 0
-		// Marshal the response
-		jsonData, err := json.Marshal(map[string]bool{"exists": exists})
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Failed to marshal response: %v", err), http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(jsonData)
-
-	case err := <-errorChan:
-		http.Error(w, fmt.Sprintf("Failed to check if key exists: %v", err), http.StatusInternalServerError)
-	}
-}
-
-func (a *BatchingAgent) handleDebugConfig(w http.ResponseWriter, r *http.Request) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	// Marshal the configuration
-	jsonData, err := json.Marshal(a.config)
+	response := map[string]string{"value": result.Value}
+	jsonResponse, err := json.Marshal(response)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to marshal configuration: %v", err), http.StatusInternalServerError)
+		ctx.Error(fmt.Sprintf("Failed to marshal response: %v", err), fasthttp.StatusInternalServerError)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(jsonData)
+	ctx.SetContentType("application/json")
+	ctx.SetBody(jsonResponse)
 }
 
-func parseEnvDuration(name string, defaultVal time.Duration) time.Duration {
-	if val, ok := os.LookupEnv(name); ok {
-		if d, err := time.ParseDuration(val); err == nil {
-			return d
-		}
+// handleSet handles SET requests
+func (s *Server) handleSet(ctx *fasthttp.RequestCtx) {
+	key := string(ctx.QueryArgs().Peek("key"))
+	if key == "" {
+		ctx.Error("Missing required parameter: key", fasthttp.StatusBadRequest)
+		return
 	}
-	return defaultVal
+
+	value := string(ctx.QueryArgs().Peek("value"))
+	if value == "" {
+		ctx.Error("Missing required parameter: value", fasthttp.StatusBadRequest)
+		return
+	}
+
+	resultCh := make(chan Result, 1)
+	req := &Request{
+		Type:     TypeSet,
+		Key:      key,
+		Value:    value,
+		ResultCh: resultCh,
+	}
+
+	s.batcher.Submit(req)
+	result := <-resultCh
+
+	if result.Error != nil {
+		ctx.Error(fmt.Sprintf("Failed to set value: %v", result.Error), fasthttp.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]string{"result": result.Value}
+	jsonResponse, err := json.Marshal(response)
+	if err != nil {
+		ctx.Error(fmt.Sprintf("Failed to marshal response: %v", err), fasthttp.StatusInternalServerError)
+		return
+	}
+
+	ctx.SetContentType("application/json")
+	ctx.SetBody(jsonResponse)
 }
 
-func parseEnvBool(name string, defaultVal bool) bool {
-	if val, ok := os.LookupEnv(name); ok {
-		if b, err := strconv.ParseBool(val); err == nil {
-			return b
-		}
+// handleDel handles DEL requests
+func (s *Server) handleDel(ctx *fasthttp.RequestCtx) {
+	key := string(ctx.QueryArgs().Peek("key"))
+	if key == "" {
+		ctx.Error("Missing required parameter: key", fasthttp.StatusBadRequest)
+		return
 	}
-	return defaultVal
+
+	resultCh := make(chan Result, 1)
+	req := &Request{
+		Type:     TypeDel,
+		Key:      key,
+		ResultCh: resultCh,
+	}
+
+	s.batcher.Submit(req)
+	result := <-resultCh
+
+	if result.Error != nil {
+		ctx.Error(fmt.Sprintf("Failed to delete key: %v", result.Error), fasthttp.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]string{"deleted": result.Value}
+	jsonResponse, err := json.Marshal(response)
+	if err != nil {
+		ctx.Error(fmt.Sprintf("Failed to marshal response: %v", err), fasthttp.StatusInternalServerError)
+		return
+	}
+
+	ctx.SetContentType("application/json")
+	ctx.SetBody(jsonResponse)
 }
 
-func parseEnvInt(name string, defaultVal int) int {
-	if val, ok := os.LookupEnv(name); ok {
-		if i, err := strconv.Atoi(val); err == nil {
-			return i
-		}
+func getEnvOrDefault(key, defaultValue string) string {
+	if value, exists := os.LookupEnv(key); exists && value != "" {
+		return value
 	}
-	return defaultVal
+	return defaultValue
 }
 
 func main() {
 	// Parse command-line flags
-	port := flag.Int("port", 8080, "Port to listen on")
-	batchingEnabled := flag.Bool("batching", true, "Enable request batching")
-	batchWindow := flag.Duration("batch-window", 100*time.Millisecond, "Batch window duration")
-	maxBatchSize := flag.Int("max-batch-size", 10, "Maximum batch size")
-	debugMode := flag.Bool("debug", false, "Enable debug mode")
-	redisHost := flag.String("redis-host", "localhost", "Redis host")
-	redisPort := flag.String("redis-port", "6379", "Redis port")
-	redisPassword := flag.String("redis-password", "", "Redis password")
-	redisPoolSize := flag.Int("redis-pool-size", 10, "Redis connection pool size")
+	portFlag := flag.Int("port", 8080, "HTTP server port")
+	redisHostFlag := flag.String("redis-host", "", "Redis host")
+	redisPortFlag := flag.String("redis-port", "6379", "Redis port")
+	redisPasswordFlag := flag.String("redis-password", "", "Redis password")
+	redisPoolSizeFlag := flag.Int("redis-pool-size", 10, "Redis connection pool size")
+	batchWindowFlag := flag.Duration("batch-window", 100*time.Millisecond, "Batch collection window")
+	maxBatchSizeFlag := flag.Int("max-batch-size", 10, "Maximum batch size")
 	flag.Parse()
 
 	// Override with environment variables if set
-	if os.Getenv("PORT") != "" {
-		*port = parseEnvInt("PORT", *port)
+	port, _ := strconv.Atoi(getEnvOrDefault("PORT", strconv.Itoa(*portFlag)))
+	redisHost := getEnvOrDefault("REDIS_HOST", *redisHostFlag)
+	redisPort := getEnvOrDefault("REDIS_PORT", *redisPortFlag)
+	redisPassword := getEnvOrDefault("REDIS_PASSWORD", *redisPasswordFlag)
+	redisPoolSize, _ := strconv.Atoi(getEnvOrDefault("REDIS_POOL_SIZE", strconv.Itoa(*redisPoolSizeFlag)))
+	
+	batchWindowStr := getEnvOrDefault("BATCH_WINDOW", "")
+	batchWindow := *batchWindowFlag
+	if batchWindowStr != "" {
+		if parsedWindow, err := time.ParseDuration(batchWindowStr); err == nil {
+			batchWindow = parsedWindow
+		}
 	}
-	if os.Getenv("BATCHING_ENABLED") != "" {
-		*batchingEnabled = parseEnvBool("BATCHING_ENABLED", *batchingEnabled)
-	}
-	if os.Getenv("BATCH_WINDOW") != "" {
-		*batchWindow = parseEnvDuration("BATCH_WINDOW", *batchWindow)
-	}
-	if os.Getenv("MAX_BATCH_SIZE") != "" {
-		*maxBatchSize = parseEnvInt("MAX_BATCH_SIZE", *maxBatchSize)
-	}
-	if os.Getenv("DEBUG_MODE") != "" {
-		*debugMode = parseEnvBool("DEBUG_MODE", *debugMode)
-	}
-	if os.Getenv("REDIS_HOST") != "" {
-		*redisHost = os.Getenv("REDIS_HOST")
-	}
-	if os.Getenv("REDIS_PORT") != "" {
-		*redisPort = os.Getenv("REDIS_PORT")
-	}
-	if os.Getenv("REDIS_PASSWORD") != "" {
-		*redisPassword = os.Getenv("REDIS_PASSWORD")
-	}
-	if os.Getenv("REDIS_POOL_SIZE") != "" {
-		*redisPoolSize = parseEnvInt("REDIS_POOL_SIZE", *redisPoolSize)
-	}
+	
+	maxBatchSize, _ := strconv.Atoi(getEnvOrDefault("MAX_BATCH_SIZE", strconv.Itoa(*maxBatchSizeFlag)))
 
-	log.Printf("Command line flags and environment variables parsed")
-	log.Printf("  Port: %d", *port)
-	log.Printf("  Redis Host: %s", *redisHost)
-	log.Printf("  Redis Port: %s", *redisPort)
-	log.Printf("  Batching Enabled: %v", *batchingEnabled)
-	log.Printf("  Batch Window: %v", *batchWindow)
-	log.Printf("  Max Batch Size: %d", *maxBatchSize)
+	// Validate Redis host
+	if redisHost == "" {
+		log.Fatal("Redis host is required")
+	}
 
 	// Create configuration
 	config := Configuration{
-		Port:            *port,
-		BatchingEnabled: *batchingEnabled,
-		BatchWindow:     *batchWindow,
-		MaxBatchSize:    *maxBatchSize,
-		DebugMode:       *debugMode,
-		RedisHost:       *redisHost,
-		RedisPort:       *redisPort,
-		RedisPassword:   *redisPassword,
-		RedisPoolSize:   *redisPoolSize,
+		Port:           port,
+		BatchWindow:    batchWindow,
+		MaxBatchSize:   maxBatchSize,
+		RedisHost:      redisHost,
+		RedisPort:      redisPort,
+		RedisPassword:  redisPassword,
+		RedisPoolSize:  redisPoolSize,
 	}
 
-	// Create and start agent
-	agent, err := NewBatchingAgent(config)
+	// Print configuration
+	log.Printf("Starting Redis batching agent with configuration:")
+	log.Printf("  Port: %d", config.Port)
+	log.Printf("  Redis Host: %s", config.RedisHost)
+	log.Printf("  Redis Port: %s", config.RedisPort)
+	log.Printf("  Batch Window: %v", config.BatchWindow)
+	log.Printf("  Max Batch Size: %d", config.MaxBatchSize)
+	log.Printf("  Redis Pool Size: %d", config.RedisPoolSize)
+
+	// Create batcher
+	batcher, err := NewBatcher(config)
 	if err != nil {
-		log.Fatalf("Failed to create Redis batching agent: %v", err)
+		log.Fatalf("Failed to create batcher: %v", err)
 	}
+	defer batcher.Shutdown()
 
-	agent.Start()
+	// Create server
+	server := NewServer(batcher, config.Port)
 
 	// Set up signal handling for graceful shutdown
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 
-	// Wait for termination signal
-	<-sigChan
+	// Start server in a goroutine
+	go func() {
+		if err := server.Start(config.Port); err != nil {
+			log.Fatalf("Failed to start server: %v", err)
+		}
+	}()
+
+	// Wait for shutdown signal
+	<-signals
 	log.Println("Shutting down...")
 
-	// Create a context with timeout for shutdown
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	// Shut down server
+	if err := server.Shutdown(); err != nil {
+		log.Printf("Error shutting down server: %v", err)
+	}
 
-	// Shutdown the agent
-	agent.Shutdown(ctx)
-	log.Println("Shutdown complete")
+	// Shut down batcher
+	if err := batcher.Shutdown(); err != nil {
+		log.Printf("Error shutting down batcher: %v", err)
+	}
 } 

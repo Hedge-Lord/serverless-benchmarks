@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: redis-batching-agent
+  namespace: openwhisk
   labels:
     app: redis-batching-agent
 spec:
@@ -13,36 +14,21 @@ spec:
       labels:
         app: redis-batching-agent
     spec:
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-            - matchExpressions:
-              - key: kubernetes.io/hostname
-                operator: In
-                values:
-                - node0.ggz-248982.ucla-progsoftsys-pg0.utah.cloudlab.us
       containers:
       - name: redis-batching-agent
         image: localhost:5000/redis-batching-agent:latest
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         ports:
         - containerPort: 8080
         env:
         - name: REDIS_HOST
-          value: "10.97.100.77"  # Replace with your remote Redis host
+          value: "redis-master"  # Replace with your actual Redis host
         - name: REDIS_PORT
-          value: "6379"  # Replace with your remote Redis port
-        - name: REDIS_PASSWORD
-          value: ""  # Replace with your Redis password if needed
-        - name: BATCHING_ENABLED
-          value: "true"
+          value: "6379"
         - name: BATCH_WINDOW
-          value: "100ms"  # 100 milliseconds batch window
+          value: "100ms"
         - name: MAX_BATCH_SIZE
           value: "10"
-        - name: DEBUG_MODE
-          value: "false"
         resources:
           limits:
             cpu: "500m"
