@@ -108,31 +108,17 @@ if [ "$LANGUAGE" == "go" ]; then
     ${BATCHING_AGENT_HOST:+-p batching_agent_host "$BATCHING_AGENT_HOST"}
     
 else
-  # Python implementation uses virtual env and zip package
-  echo "Creating virtual environment for Python implementation..."
+  # Python implementation uses Docker image
+  DOCKER_IMAGE="redis-benchmark-python:latest"
+  REGISTRY_IMAGE="${REGISTRY_HOST}/${DOCKER_IMAGE}"
   
-  # Navigate to the actions directory
-  cd "$(dirname "$0")/actions"
-  
-  # Set up temporary directory
-  TEMP_DIR="tmp"
-  rm -rf "$TEMP_DIR"
-  mkdir -p "$TEMP_DIR"
-  
-  # Create virtual environment and install dependencies
-  python3 -m venv "$TEMP_DIR/venv"
-  source "$TEMP_DIR/venv/bin/activate"
-  pip install --upgrade pip
-  pip install -r requirements.txt
-  
-  # Create zip package
-  cp redis_benchmark.py "$TEMP_DIR/"
-  cd "$TEMP_DIR"
-  zip -r ../action.zip redis_benchmark.py venv/lib/python*/site-packages
-  cd ..
-  
-  # Deactivate virtual environment
-  deactivate
+  # Check if the image exists in the registry
+  echo "Verifying Python image exists in registry..."
+  if ! curl -s "http://${REGISTRY_HOST}/v2/redis-benchmark-python/tags/list" | grep -q "latest"; then
+    echo "Warning: Image ${REGISTRY_IMAGE} not found in registry."
+    echo "Please run build_python.sh on all worker nodes before deploying."
+    echo "Continuing with deployment anyway..."
+  fi
   
   # Create or update package
   echo "Creating/updating package..."
@@ -141,19 +127,14 @@ else
   # Deploy the action
   echo "Deploying Python Redis benchmark action..."
   wsk action update ${PACKAGE_NAME}/${ACTION_NAME} \
-    --kind python:3.9 \
-    --main main \
+    --docker ${REGISTRY_IMAGE} \
     --memory 512 \
     --timeout 60000 \
     --web true \
-    action.zip \
     -p REDIS_HOST "$REDIS_HOST" \
     -p REDIS_PORT "$REDIS_PORT" \
     ${REDIS_PASSWORD:+-p REDIS_PASSWORD "$REDIS_PASSWORD"} \
     ${BATCHING_AGENT_HOST:+-p batching_agent_host "$BATCHING_AGENT_HOST"}
-  
-  # Clean up
-  rm -rf "$TEMP_DIR" action.zip
 fi
 
 # Get the action URL

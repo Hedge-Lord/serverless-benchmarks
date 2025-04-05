@@ -1,0 +1,14 @@
+FROM openwhisk/python3action
+
+# Switch to root to install packages
+USER root
+
+# Copy requirements and install dependencies
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Copy the action file
+COPY redis_benchmark.py /action/exec
+
+# Switch back to non-root user
+USER 1001 
