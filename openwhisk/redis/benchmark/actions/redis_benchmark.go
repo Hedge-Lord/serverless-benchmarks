@@ -63,7 +63,15 @@ type OperationResult struct {
 // getNodeIP retrieves and caches the node IP for the current pod
 func getNodeIP() (string, error) {
 	var err error
+	
+	// Log the memory addresses to track container reuse
+	log.Printf("DEBUG: Container instance: %s", os.Getenv("__OW_ACTIVATION_ID"))
+	log.Printf("DEBUG: Memory address of cachedNodeIP variable: %p", &cachedNodeIP)
+	log.Printf("DEBUG: Memory address of nodeIPOnce variable: %p", &nodeIPOnce)
+	log.Printf("DEBUG: Current cachedNodeIP value: %q", cachedNodeIP)
+	
 	nodeIPOnce.Do(func() {
+		log.Printf("DEBUG: Inside nodeIPOnce.Do - first execution for this container instance")
 		// First check if batching_agent_host was provided as a parameter
 		batchingHost := os.Getenv("BATCHING_AGENT_HOST")
 		if batchingHost != "" {
@@ -104,6 +112,8 @@ func getNodeIP() (string, error) {
 		cachedNodeIP = "localhost"
 		log.Printf("No node IP could be determined. Using default: %s", cachedNodeIP)
 	})
+	
+	log.Printf("DEBUG: After nodeIPOnce.Do - cachedNodeIP value: %q", cachedNodeIP)
 	
 	if cachedNodeIP == "" {
 		return "", fmt.Errorf("failed to determine node IP")
