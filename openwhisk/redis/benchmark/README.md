@@ -1,176 +1,146 @@
-# Redis Benchmark for OpenWhisk
+# Redis Benchmarks for OpenWhisk
 
-This benchmark is designed to test the performance of OpenWhisk actions accessing Redis, both directly and through a batching agent. It provides a foundation for implementing and measuring batching optimizations at the runtime level in OpenWhisk.
+This directory contains benchmarking tools for evaluating Redis performance within OpenWhisk actions, with support for both direct Redis operations and operations through a batching agent.
 
-## Overview
+## Implementations
 
-The benchmark can be run in two modes:
-- **Direct Redis access**: Action directly connects to Redis server
-- **Batched Redis access**: Action connects to a Redis batching agent, which batches operations
+The Redis benchmark is available in two implementations:
 
-The benchmark supports various Redis operations:
-- `set`: Set key-value pairs
-- `get`: Retrieve key-value pairs
-- `del`: Delete keys
-- `exists`: Check if keys exist
+1. **Go Implementation**: The original implementation with high performance.
+2. **Python Implementation**: An alternative implementation that may be easier to modify.
 
-## Setup
+Both implementations maintain the same functionality and can be selected at deployment time.
 
-### Prerequisites
+## Prerequisites
 
-- OpenWhisk deployment with `wsk` CLI configured
-- Python 3.7+ with pip
-- Docker installed on all worker nodes
-- Local Docker registry at `localhost:5000` on each node
-- Redis server accessible from OpenWhisk
-- Redis batching agent deployed (for batched mode)
+- OpenWhisk CLI (`wsk`) installed and configured
+- Access to a Redis server
+- (Optional) Redis batching agent deployed
+- Docker (for building the Go implementation)
+- Python 3.9+ (for the Python implementation)
 
-### Configuration
+## Quick Start
 
-1. Create a `local.env` file from the template:
+1. Clone the repository
+2. Build the Docker image (for Go implementation only)
+3. Deploy the OpenWhisk action
+4. Run benchmarks
 
-```bash
-cp template.local.env local.env
-```
+## Building (Go Implementation Only)
 
-2. Edit the `local.env` file with your configuration:
+To build the Docker image for the Go implementation, run:
 
-```
-# Redis server configuration
-REDIS_HOST=your_redis_server_ip
-REDIS_PORT=6379
-REDIS_PASSWORD=your_redis_password_if_any
-
-# Redis batching agent configuration (optional)
-BATCHING_AGENT_HOST=your_batching_agent_ip
-BATCHING_AGENT_PORT=8080
-
-# OpenWhisk configuration
-OPENWHISK_APIHOST=your_openwhisk_host
-OPENWHISK_AUTH=your_auth_key
-```
-
-### Build and Deployment
-
-The benchmark uses a two-step build and deployment process:
-
-1. Build the image on each worker node:
-
-```bash
+```sh
 # On each worker node
 ./build.sh
 ```
 
-2. Deploy the action from the master node:
+This builds the Docker image and pushes it to the local registry.
 
-```bash
-# On the master node (with kubectl & wsk access)
-export REDIS_HOST=your_redis_server_ip
-./deploy.sh
+## Deployment
+
+To deploy the OpenWhisk action, use the `deploy.sh` script:
+
+```sh
+# Deploy the Go implementation (default)
+REDIS_HOST=<redis-ip> ./deploy.sh
+
+# Deploy the Python implementation
+REDIS_HOST=<redis-ip> ./deploy.sh -l python
+
+# Specify batching agent (optional)
+REDIS_HOST=<redis-ip> BATCHING_AGENT_HOST=<agent-ip> ./deploy.sh -l go
 ```
 
-This approach ensures that the Docker image is available locally on each worker node, minimizing image pull latency when actions are invoked.
+## Configuration
 
-## Running the Benchmark
+Create a `local.env` file based on the provided `local.env.template`:
 
-### Direct Invocation
-
-You can invoke the action directly for testing:
-
-```bash
-# Single operation, direct Redis access
-wsk action invoke redis_benchmark/redis_benchmark -r -p num_ops 1 -p operation_type set -p use_batching false
-
-# Multiple operations, batched Redis access
-wsk action invoke redis_benchmark/redis_benchmark -r -p num_ops 10 -p operation_type set -p use_batching true -p parallel_calls 5
+```sh
+cp local.env.template local.env
 ```
 
-### Benchmark Runner
-
-For performance benchmarking, use the benchmark runner script:
-
-```bash
-# Direct Redis access benchmark
-python benchmark_runner.py --action redis_benchmark/redis_benchmark --rate 10 --invocations 100 --ops 10 --operation set
-
-# Batched Redis access benchmark
-python benchmark_runner.py --action redis_benchmark/redis_benchmark --rate 10 --invocations 100 --ops 10 --operation set --batching
-```
-
-### Parameters
-
-- `--action`: Name of the OpenWhisk action to invoke (default: `redis_benchmark/redis_benchmark`)
-- `--rate`: Rate of invocations per second (default: 10)
-- `--invocations`: Total number of invocations to perform (default: 100)
-- `--ops`: Number of Redis operations per invocation (default: 10)
-- `--operation`: Redis operation type: get, set, del, exists (default: set)
-- `--batching`: Enable batching mode (default: False)
-- `--parallel`: Number of parallel calls within each action (default: 5)
-- `--key-prefix`: Prefix for Redis keys (default: benchmark)
-- `--output`: Output file for results (default: redis_benchmark_results.json)
-- `--env`: Path to environment file (default: local.env)
-
-## Comparing Performance
-
-To compare direct vs. batched performance:
-
-```bash
-# Run direct Redis access benchmark
-python benchmark_runner.py --operation set --ops 100 --output direct_results.json
-
-# Run batched Redis access benchmark
-python benchmark_runner.py --operation set --ops 100 --batching --output batched_results.json
-
-# Compare the results
-python compare_results.py direct_results.json batched_results.json
-```
-
-## Results
-
-The benchmark generates a results file containing:
-
-- Execution time percentiles (50th, 90th, 99th)
-- Min, max, and mean execution times
-- Success and error rates
-- Raw results for all invocations
-
-## Project Structure
+Edit `local.env` to set your configuration values:
 
 ```
-openwhisk/redis/benchmark/
-├── actions/
-│   ├── redis_benchmark.go   # The Go implementation of the Redis benchmark
-│   ├── Dockerfile           # Dockerfile for building the action
-│   └── go.mod               # Go module definition
-├── benchmark_runner.py      # Script to invoke actions and collect metrics
-├── build.sh                 # Script to build and push the Docker image to local registry
-├── deploy.sh                # Script to deploy the action to OpenWhisk
-├── template.local.env       # Template for configuration variables
-└── README.md                # This documentation
+# Required
+REDIS_HOST=10.0.0.1
+
+# Optional
+REDIS_PORT=6379
+REDIS_PASSWORD=your_password
+BATCHING_AGENT_HOST=10.0.0.2
 ```
+
+## Running Benchmarks
+
+Use the `benchmark_runner.py` script to run benchmarks:
+
+```sh
+# Basic benchmark (direct Redis access)
+./benchmark_runner.py --ops 100 --operation set
+
+# With batching
+./benchmark_runner.py --ops 100 --operation set --batching
+
+# Advanced options
+./benchmark_runner.py --ops 100 --operation set --batching --rate 20 --invocations 500 --parallel 10
+```
+
+### Benchmark Parameters
+
+| Parameter      | Description                                      | Default              |
+|----------------|--------------------------------------------------|----------------------|
+| --action       | OpenWhisk action name                            | redis_benchmark/redis_benchmark |
+| --rate         | Rate of invocations per second                   | 10                   |
+| --invocations  | Total number of invocations to run               | 100                  |
+| --ops          | Number of Redis operations per invocation        | 10                   |
+| --operation    | Redis operation type (get, set, del, exists)     | set                  |
+| --batching     | Use batching agent                               | false                |
+| --parallel     | Parallel calls within each action                | 5                    |
+| --key-prefix   | Prefix for Redis keys                            | benchmark            |
+| --output       | Output file for results                          | redis_benchmark_results.json |
+| --env          | Path to environment file                         | local.env            |
+
+## Results Analysis
+
+The benchmark results are saved to a JSON file with detailed metrics, including:
+- Success rate
+- Min, max, mean, median, and percentile latencies
+- Raw results for further analysis
+
+Example summary output:
+
+```
+Benchmark Summary:
+Successful invocations: 100/100
+Action execution time (ms):
+  Min: 45.23
+  Max: 210.76
+  Mean: 120.45
+  Median: 118.32
+  90th percentile: 180.41
+  99th percentile: 205.89
+```
+
+## Implementation Details
+
+Both implementations:
+- Support direct and batched Redis operations
+- Cache the node IP to optimize batching agent discovery
+- Provide detailed performance metrics
+- Support parallel Redis operations
+- Include diagnostic logging
 
 ## Troubleshooting
 
-### Connection Issues
+If you encounter issues:
 
-If the action fails to connect to Redis or the batching agent:
+1. Check that the Redis server is accessible
+2. Verify that the batching agent is deployed (if using batching)
+3. Ensure the action has been deployed correctly
+4. Check the OpenWhisk logs for detailed error messages
 
-1. Verify the Redis server is accessible from OpenWhisk
-2. Check the Redis port is open and not blocked by firewalls
-3. For batched mode, ensure the batching agent is running and accessible
+## License
 
-### Image Pull Issues
-
-If you see "ImagePullBackOff" errors in the OpenWhisk logs:
-
-1. Make sure the build script was run on all worker nodes
-2. Verify the local registry is running on each node
-3. Check that the image name and tag match between build and deploy scripts
-
-### Performance Issues
-
-If batching doesn't show performance improvement:
-
-1. Check the batch window setting in the batching agent
-2. Increase parallel operations to see more significant batching effects
-3. Try operations that have higher Redis latency (like complex queries) 
+This project is licensed under the Apache License 2.0. 

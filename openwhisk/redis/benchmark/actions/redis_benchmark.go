@@ -252,6 +252,8 @@ func batchedRedisOperation(batchingURL, opType, key, value string) (string, erro
 		return "", fmt.Errorf("unsupported operation type: %s", opType)
 	}
 	
+	log.Printf("DEBUG: Making request to batching agent: %s %s", method, url)
+	
 	req, err := http.NewRequest(method, url, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %v", err)
@@ -260,11 +262,16 @@ func batchedRedisOperation(batchingURL, opType, key, value string) (string, erro
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
+		log.Printf("ERROR: Request to batching agent failed: %v", err)
 		return "", fmt.Errorf("failed to send request: %v", err)
 	}
 	defer resp.Body.Close()
 	
+	log.Printf("DEBUG: Received response from batching agent: status=%d", resp.StatusCode)
+	
 	if resp.StatusCode != http.StatusOK {
+		body, _ := ioutil.ReadAll(resp.Body)
+		log.Printf("ERROR: Non-OK response from batching agent: status=%d body=%s", resp.StatusCode, string(body))
 		return "", fmt.Errorf("request failed with status: %s", resp.Status)
 	}
 	
@@ -276,22 +283,27 @@ func batchedRedisOperation(batchingURL, opType, key, value string) (string, erro
 	// Parse JSON response
 	var result map[string]string
 	if err := json.Unmarshal(body, &result); err != nil {
+		log.Printf("ERROR: Failed to parse JSON response: %v, body: %s", err, string(body))
 		return "", fmt.Errorf("failed to parse response: %v", err)
 	}
 	
 	// Return different fields based on operation type
+	var returnValue string
 	switch opType {
 	case "get":
-		return result["value"], nil
+		returnValue = result["value"]
 	case "set":
-		return result["result"], nil
+		returnValue = result["result"]
 	case "del":
-		return result["deleted"], nil
+		returnValue = result["deleted"]
 	case "exists":
-		return result["exists"], nil
+		returnValue = result["exists"]
 	default:
 		return "", fmt.Errorf("unsupported operation type: %s", opType)
 	}
+	
+	log.Printf("DEBUG: Operation %s completed successfully, result: %s", opType, returnValue)
+	return returnValue, nil
 }
 
 // runBenchmark runs the Redis benchmark
@@ -494,6 +506,13 @@ func runBenchmark(config Configuration) Response {
 
 // main is the entry point for the OpenWhisk action
 func main() {
+	// Print container and activation info for debugging
+	activationID := os.Getenv("__OW_ACTIVATION_ID")
+	log.Printf("===== ACTIVATION START %s =====", activationID)
+	log.Printf("Process ID: %d", os.Getpid())
+	hostname, _ := os.Hostname()
+	log.Printf("Container hostname: %s", hostname)
+	
 	// Read and parse input
 	input, err := ioutil.ReadAll(os.Stdin)
 	if err != nil {
@@ -622,5 +641,6 @@ func main() {
 		os.Exit(1)
 	}
 	
+	log.Printf("===== ACTIVATION END %s =====", activationID)
 	fmt.Println(string(output))
 } 
