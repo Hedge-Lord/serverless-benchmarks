@@ -1,0 +1,16 @@
+FROM python:3.8-slim
+
+# Install dependencies
+RUN pip install redis==4.3.6 requests==2.27.1
+
+# Create action directory
+WORKDIR /action
+
+# Copy action code
+COPY redis_benchmark.py /action/exec
+
+# Make file executable
+RUN chmod +x /action/exec
+
+# Set entry point
+ENTRYPOINT ["/action/exec"] 
