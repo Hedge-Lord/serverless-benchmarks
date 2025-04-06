@@ -15,6 +15,7 @@ if [ -z "$REDIS_HOST" ]; then
 fi
 
 echo "Deploying Redis benchmark action with direct implementation..."
+echo "Using Redis server at $REDIS_HOST:${REDIS_PORT:-6379}"
 
 # Create or update package
 wsk package update ${PACKAGE_NAME}
@@ -30,6 +31,10 @@ wsk action update ${PACKAGE_NAME}/${ACTION_NAME} \
   -p REDIS_PORT "${REDIS_PORT:-6379}" \
   ${REDIS_PASSWORD:+-p REDIS_PASSWORD "$REDIS_PASSWORD"} \
   ${BATCHING_AGENT_HOST:+-p batching_agent_host "$BATCHING_AGENT_HOST"}
+
+# Verify the action was created
+echo "Verifying action deployment..."
+wsk action get ${PACKAGE_NAME}/${ACTION_NAME} > /dev/null
 
 echo "Redis benchmark action (direct implementation) has been deployed!"
 echo "Invoke with: wsk action invoke ${PACKAGE_NAME}/${ACTION_NAME} -r -p num_ops 10 -p operation_type set -p use_batching false -p parallel_calls 5" 
