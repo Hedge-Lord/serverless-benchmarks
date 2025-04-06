@@ -108,17 +108,46 @@ if [ "$LANGUAGE" == "go" ]; then
     ${BATCHING_AGENT_HOST:+-p batching_agent_host "$BATCHING_AGENT_HOST"}
     
 else
-  # Python implementation uses Docker image
-  DOCKER_IMAGE="redis-benchmark-python:latest"
-  REGISTRY_IMAGE="${REGISTRY_HOST}/${DOCKER_IMAGE}"
+  # Python implementation uses zip packaging
+  echo "Deploying Python Redis benchmark action..."
   
-  # Check if the image exists in the registry
-  echo "Verifying Python image exists in registry..."
-  if ! curl -s "http://${REGISTRY_HOST}/v2/redis-benchmark-python/tags/list" | grep -q "latest"; then
-    echo "Warning: Image ${REGISTRY_IMAGE} not found in registry."
-    echo "Please run build_python.sh on all worker nodes before deploying."
-    echo "Continuing with deployment anyway..."
-  fi
+  # Navigate to the actions directory
+  cd "$(dirname "$0")/actions"
+  
+  # Set up temporary directory
+  TEMP_DIR="tmp"
+  rm -rf "$TEMP_DIR"
+  mkdir -p "$TEMP_DIR"
+  
+  # Create virtual environment and install dependencies
+  echo "Creating virtual environment and installing dependencies..."
+  python3 -m venv "$TEMP_DIR/venv"
+  source "$TEMP_DIR/venv/bin/activate"
+  pip install --upgrade pip
+  pip install -r requirements.txt
+  
+  # Create package directory
+  mkdir -p "$TEMP_DIR/package"
+  
+  # Copy the action file to the package directory
+  echo "Copying action code..."
+  cp redis_benchmark.py "$TEMP_DIR/package/__main__.py"
+  
+  # Copy dependencies to the package directory
+  echo "Copying dependencies..."
+  cp -r "$TEMP_DIR/venv/lib/python"*/site-packages/* "$TEMP_DIR/package/"
+  
+  # Create zip package
+  echo "Creating action package..."
+  cd "$TEMP_DIR/package"
+  ZIP_FILE="../../redis_benchmark.zip"
+  zip -r "$ZIP_FILE" * > /dev/null
+  
+  # Return to actions directory
+  cd ../..
+  
+  # Deactivate virtual environment
+  deactivate
   
   # Create or update package
   echo "Creating/updating package..."
@@ -127,7 +156,8 @@ else
   # Deploy the action
   echo "Deploying Python Redis benchmark action..."
   wsk action update ${PACKAGE_NAME}/${ACTION_NAME} \
-    --docker ${REGISTRY_IMAGE} \
+    --kind python:3 \
+    redis_benchmark.zip \
     --memory 512 \
     --timeout 60000 \
     --web true \
@@ -135,6 +165,9 @@ else
     -p REDIS_PORT "$REDIS_PORT" \
     ${REDIS_PASSWORD:+-p REDIS_PASSWORD "$REDIS_PASSWORD"} \
     ${BATCHING_AGENT_HOST:+-p batching_agent_host "$BATCHING_AGENT_HOST"}
+  
+  # Clean up
+  rm -rf "$TEMP_DIR" redis_benchmark.zip
 fi
 
 # Get the action URL
